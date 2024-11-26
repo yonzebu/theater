@@ -209,7 +209,6 @@ fn update_videos(
     }
 }
 
-// #[derive(Default)]
 struct VideoStreamLoader {
     root: PathBuf,
 }
