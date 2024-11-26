@@ -1,16 +1,14 @@
-
 use bevy::asset::UntypedAssetId;
 use bevy::ecs::component;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::render::render_resource::{AsBindGroup, ShaderRef};
-use bevy::scene::SceneInstanceReady;
 use bevy::{math::vec3, prelude::*};
 
 mod debug;
 use debug::*;
 use video::{VideoPlugin, VideoStream};
-mod video;
 mod script;
+mod video;
 
 #[derive(Clone, Asset, TypePath, AsBindGroup)]
 struct Paper {}
@@ -42,7 +40,7 @@ struct AssetsToLoad(Vec<UntypedAssetId>);
 impl<I> From<I> for AssetsToLoad
 where
     I: IntoIterator,
-    I::Item: Into<UntypedAssetId>
+    I::Item: Into<UntypedAssetId>,
 {
     fn from(value: I) -> Self {
         AssetsToLoad(value.into_iter().map(|item| item.into()).collect())
@@ -59,7 +57,10 @@ impl Component for WaitingForLoads {
             if let Some(mut visibility) = deferred_world.get_mut::<Visibility>(entity) {
                 *visibility = Visibility::Hidden;
             } else {
-                deferred_world.commands().entity(entity).insert(Visibility::Hidden);
+                deferred_world
+                    .commands()
+                    .entity(entity)
+                    .insert(Visibility::Hidden);
             }
         });
     }
@@ -72,7 +73,6 @@ fn setup(
     mut papers: ResMut<Assets<ExtendedMaterial<StandardMaterial, Paper>>>,
     assets: Res<AssetServer>,
 ) {
-
     commands.spawn((Camera3d::default(), Transform::from_xyz(0., 2., 5.)));
     commands.spawn((PointLight::default(), Transform::from_xyz(0., 2., -9.)));
 
@@ -131,28 +131,27 @@ fn setup(
     let me_mesh = assets.load("nonfinal/me.glb#Mesh0/Primitive0");
     commands.spawn((
         Mesh3d(me_mesh.clone()),
-        MeshMaterial3d(papers.add(
-            ExtendedMaterial {
-                base: StandardMaterial::from(me_image.clone()),
-                extension: Paper {}
-            }
-        )),
-        Transform::from_xyz(-2., 0., -0.5).looking_to(Dir3::Y, Dir3::Z).with_scale(Vec3::ONE * 0.5),
+        MeshMaterial3d(papers.add(ExtendedMaterial {
+            base: StandardMaterial::from(me_image.clone()),
+            extension: Paper {},
+        })),
+        Transform::from_xyz(-2., 0., -0.5)
+            .looking_to(Dir3::Y, Dir3::Z)
+            .with_scale(Vec3::ONE * 0.5),
         WaitingForLoads,
     ));
     let you_image = assets.load("nonfinal/maybey.png");
     let you_mesh = assets.load("nonfinal/you.glb#Mesh0/Primitive0");
     commands.spawn((
         Mesh3d(you_mesh.clone()),
-        MeshMaterial3d(papers.add(
-            ExtendedMaterial {
-                base: StandardMaterial::from(you_image.clone()),
-                extension: Paper {}
-            }
-        )),
-        Transform::from_xyz(2., 0., -0.5).looking_to(Dir3::Y, Dir3::Z).with_scale(Vec3::ONE * 0.5),
-        WaitingForLoads
-    
+        MeshMaterial3d(papers.add(ExtendedMaterial {
+            base: StandardMaterial::from(you_image.clone()),
+            extension: Paper {},
+        })),
+        Transform::from_xyz(2., 0., -0.5)
+            .looking_to(Dir3::Y, Dir3::Z)
+            .with_scale(Vec3::ONE * 0.5),
+        WaitingForLoads,
     ));
 
     // chairs
@@ -174,7 +173,7 @@ fn setup(
                 },
                 DebugMarker,
                 Chair,
-                WaitingForLoads
+                WaitingForLoads,
             ));
         }
     }
@@ -184,22 +183,22 @@ fn setup(
         me_mesh.id().untyped(),
         you_image.id().untyped(),
         you_mesh.id().untyped(),
-        chair.id().untyped()
+        chair.id().untyped(),
     ]));
 }
 
+// TODO: use material extension with screen reflections
 fn update_chair_materials(
     mut commands: Commands,
     roots: Query<Entity, With<Chair>>,
     with_children: Query<&Children>,
-    not_updateds: Query<(Entity, &MeshMaterial3d<StandardMaterial>)>
+    not_updateds: Query<(Entity, &MeshMaterial3d<StandardMaterial>)>,
 ) {
     for root in roots.iter() {
         for descendant in with_children.iter_descendants(root) {
             let Ok((entity, old_material)) = not_updateds.get(descendant) else {
                 continue;
             };
-            
         }
     }
 }
@@ -211,9 +210,15 @@ fn update_video_player(
     keyboard: Res<ButtonInput<KeyCode>>,
 ) {
     for (video_material, video_player) in video_player.iter() {
-        if let (Some(material), Some(video_stream)) = (materials.get_mut(video_material.id()), video_streams.get_mut(video_player.0.id())) {
-            material.base_color_texture = video_stream.buffered_frames.get(0).map(|frame| frame.image.clone());
-            
+        if let (Some(material), Some(video_stream)) = (
+            materials.get_mut(video_material.id()),
+            video_streams.get_mut(video_player.0.id()),
+        ) {
+            material.base_color_texture = video_stream
+                .buffered_frames
+                .get(0)
+                .map(|frame| frame.image.clone());
+
             if keyboard.just_pressed(KeyCode::KeyV) {
                 video_stream.playing = !video_stream.playing;
                 println!("video playing = {}", video_stream.playing);
@@ -242,27 +247,30 @@ fn check_loaded_state(
     }
 }
 
-fn update(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>
-) {
-}
+fn update() {}
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, MaterialPlugin::<ExtendedMaterial<StandardMaterial, Paper>>::default(), DebugPlugin, VideoPlugin))
-        .add_systems(Startup, setup)
-        .add_systems(Update, (
-            check_loaded_state, 
-            update_chair_materials, 
-            update, 
-            update_video_player
+        .add_plugins((
+            DefaultPlugins,
+            MaterialPlugin::<ExtendedMaterial<StandardMaterial, Paper>>::default(),
+            DebugPlugin,
+            VideoPlugin,
         ))
+        .add_systems(Startup, setup)
+        .add_systems(
+            Update,
+            (
+                check_loaded_state,
+                update_chair_materials,
+                update,
+                update_video_player,
+            ),
+        )
         // .add_systems(
-        //     Last, 
+        //     Last,
         //     (
-        //         debug_events::<AssetEvent<StandardMaterial>>(), 
+        //         debug_events::<AssetEvent<StandardMaterial>>(),
         //         debug_events::<AssetEvent<Scene>>(),
         //     )
         // )

@@ -1,8 +1,25 @@
-use std::{collections::VecDeque, marker::PhantomData, path::{Path, PathBuf}, sync::{mpsc::{channel, Receiver, Sender, TryRecvError}, Mutex}, task::{Context, Waker}};
+use std::{
+    collections::VecDeque,
+    path::{Path, PathBuf},
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Mutex,
+    },
+};
 
-use bevy::{asset::{io::AssetSourceId, AssetLoader, ErasedAssetLoader, RenderAssetUsages}, prelude::*, render::{render_resource::{Extent3d, TextureDimension, TextureFormat}, texture::ImageLoader}, tasks::{futures_lite::FutureExt, AsyncComputeTaskPool, ComputeTaskPool, Task}};
+use bevy::{
+    asset::{AssetLoader, RenderAssetUsages},
+    prelude::*,
+    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+    tasks::AsyncComputeTaskPool,
+};
 use ffmpeg_next::{
-    self as ffmpeg, codec, decoder, ffi::EAGAIN, format::{context::Input, Pixel}, frame, media, software::scaling::{self, Flags}, Packet, Rational
+    self as ffmpeg, codec, decoder,
+    ffi::EAGAIN,
+    format::{context::Input, Pixel},
+    frame, media,
+    software::scaling,
+    Packet, Rational,
 };
 
 struct ScalingContext(scaling::Context);
@@ -14,17 +31,21 @@ struct DecodedFrame {
     width: u32,
     height: u32,
     data: Vec<u8>,
-    pts: i64
+    pts: i64,
 }
 
 impl From<DecodedFrame> for Image {
     fn from(value: DecodedFrame) -> Self {
         Image::new(
-            Extent3d { width: value.width, height: value.height, depth_or_array_layers: 1},
+            Extent3d {
+                width: value.width,
+                height: value.height,
+                depth_or_array_layers: 1,
+            },
             TextureDimension::D2,
             value.data,
             TextureFormat::Rgba8Unorm,
-            RenderAssetUsages::all()
+            RenderAssetUsages::all(),
         )
     }
 }
@@ -39,7 +60,7 @@ struct VideoDecoder {
     send_frames: Sender<DecodedFrame>,
     send_self: Sender<VideoDecoder>,
 }
-// SAFETY: i don't plan on accessing this when i don't have mutable access anyways 
+// SAFETY: i don't plan on accessing this when i don't have mutable access anyways
 unsafe impl Sync for VideoDecoder {}
 
 impl VideoDecoder {
@@ -56,8 +77,8 @@ impl VideoDecoder {
                         self.finished = true;
                         self.finish_task();
                         return;
-                    },
-                    Err(e) => panic!("packet read error: {e:?}")
+                    }
+                    Err(e) => panic!("packet read error: {e:?}"),
                 }
                 if packet.stream() == self.stream_index {
                     break;
@@ -66,7 +87,7 @@ impl VideoDecoder {
             if should_send_packet {
                 self.decoder.send_packet(&packet).unwrap();
             }
-        
+
             let mut decoded;
             let mut scaled;
             loop {
@@ -77,15 +98,17 @@ impl VideoDecoder {
                         scaled = frame::Video::empty();
                         self.scaler.0.run(&decoded, &mut scaled).unwrap();
 
-                        self.send_frames.send(DecodedFrame { 
-                            width: scaled.width(), 
-                            height: scaled.height(), 
-                            data: scaled.data(0).to_owned(),
-                            pts: decoded.pts().unwrap(),
-                        }).unwrap();
+                        self.send_frames
+                            .send(DecodedFrame {
+                                width: scaled.width(),
+                                height: scaled.height(),
+                                data: scaled.data(0).to_owned(),
+                                pts: decoded.pts().unwrap(),
+                            })
+                            .unwrap();
                     }
                     Err(ffmpeg::Error::Other { errno: EAGAIN }) => break,
-                    Err(e) => panic!("receive frame error: {e:?}")
+                    Err(e) => panic!("receive frame error: {e:?}"),
                 }
             }
         }
@@ -102,7 +125,7 @@ impl VideoDecoder {
 #[derive(Debug)]
 pub struct BufferedFrame {
     pub image: Handle<Image>,
-    pts: i64
+    pts: i64,
 }
 
 #[derive(Asset, TypePath)]
@@ -116,7 +139,6 @@ pub struct VideoStream {
     /// in seconds (i think)
     progress: Rational,
     time_base: Rational,
-    start_time: i64,
 }
 
 impl VideoStream {
@@ -147,7 +169,7 @@ impl VideoStream {
                 latest_pts: None,
                 finished: false,
                 send_self: send_decoder,
-                send_frames
+                send_frames,
             }),
             recv_decoder: Mutex::new(recv_decoder),
             recv_frames: Mutex::new(recv_frames),
@@ -155,7 +177,6 @@ impl VideoStream {
             playing: false,
             progress: Rational::new(start_time as i32, 1) * time_base,
             time_base,
-            start_time
         })
     }
 
@@ -167,7 +188,6 @@ impl VideoStream {
 fn update_videos(
     mut videos: ResMut<Assets<VideoStream>>,
     mut images: ResMut<Assets<Image>>,
-    keyboard: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
 ) {
     for (_, video) in videos.iter_mut() {
@@ -178,15 +198,22 @@ fn update_videos(
         }
         let lookahead_progress = video.progress + Rational(5, 1);
         if let Some(mut decoder) = video.decoder.take() {
-            if video.buffered_frames.back().is_none_or(|frame| Rational(frame.pts as i32, 1) <= lookahead_progress / time_base)
-                && !decoder.finished 
+            if video
+                .buffered_frames
+                .back()
+                .is_none_or(|frame| Rational(frame.pts as i32, 1) <= lookahead_progress / time_base)
+                && !decoder.finished
             {
                 if let Some(frame) = video.buffered_frames.back() {
                     decoder.latest_pts = Some(frame.pts);
                 }
-                AsyncComputeTaskPool::get().spawn(async move {
-                    decoder.decode_until_pts(Into::<f64>::into(lookahead_progress / time_base) as i64)
-                }).detach();
+                AsyncComputeTaskPool::get()
+                    .spawn(async move {
+                        decoder.decode_until_pts(
+                            Into::<f64>::into(lookahead_progress / time_base) as i64
+                        )
+                    })
+                    .detach();
             } else {
                 // no need to decode more frames yet
                 video.decoder = Some(decoder);
@@ -196,15 +223,20 @@ fn update_videos(
                 video.decoder = Some(decoder);
             }
         }
-        
+
         while let Ok(frame) = video.recv_frames.get_mut().unwrap().try_recv() {
             let pts = frame.pts;
-            video.buffered_frames.push_back(BufferedFrame { image: images.add(frame), pts });
+            video.buffered_frames.push_back(BufferedFrame {
+                image: images.add(frame),
+                pts,
+            });
         }
-    
+
         let current_pts: f64 = (video.progress / time_base).into();
         let current_pts = current_pts as i64;
-        let current = video.buffered_frames.partition_point(|frame| frame.pts < current_pts);
+        let current = video
+            .buffered_frames
+            .partition_point(|frame| frame.pts < current_pts);
         video.buffered_frames.drain(0..current);
     }
 }
@@ -223,10 +255,9 @@ impl FromWorld for VideoStreamLoader {
             std::env::current_exe()
                 .map(|path| path.parent().map(ToOwned::to_owned).unwrap())
                 .unwrap()
-        }.join("assets");
-        VideoStreamLoader {
-            root
         }
+        .join("assets");
+        VideoStreamLoader { root }
     }
 }
 
@@ -236,7 +267,7 @@ impl AssetLoader for VideoStreamLoader {
     type Settings = ();
     async fn load(
         &self,
-        reader: &mut dyn bevy::asset::io::Reader,
+        _reader: &mut dyn bevy::asset::io::Reader,
         _settings: &Self::Settings,
         load_context: &mut bevy::asset::LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
@@ -252,8 +283,7 @@ pub struct VideoPlugin;
 impl Plugin for VideoPlugin {
     fn build(&self, app: &mut App) {
         ffmpeg::init().unwrap();
-        app
-            .init_asset::<VideoStream>()
+        app.init_asset::<VideoStream>()
             .init_asset_loader::<VideoStreamLoader>()
             .add_systems(PostUpdate, update_videos);
     }

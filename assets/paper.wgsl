@@ -52,13 +52,7 @@ fn oklab_to_linear_srgb(c: vec3<f32>) -> vec3<f32> {
     );
 }
 
-
-// @group(2) @binding(0) var image: texture_2d<f32>;
-// @group(2) @binding(1) var image_sampler: sampler;
-
 struct ScribbleOutput {
-    // This is `clip position` when the struct is used as a vertex stage output
-    // and `frag coord` when used as a fragment stage input
     @builtin(position) position: vec4<f32>,
     @location(0) world_position: vec4<f32>,
     @location(1) world_normal: vec3<f32>,
@@ -85,8 +79,6 @@ struct ScribbleOutput {
 
 fn vertex_from_scribble(scribble: ScribbleOutput) -> VertexOutput {
     var out: VertexOutput;
-    // This is `clip position` when the struct is used as a vertex stage output
-    // and `frag coord` when used as a fragment stage input
     out.position = scribble.position;
     out.world_position = scribble.world_position;
     out.world_normal = scribble.world_normal;
@@ -120,7 +112,6 @@ fn vertex(vertex: Vertex, @builtin(vertex_index) vertex_index: u32) -> ScribbleO
     var seed: u32 = vertex_index + u32(floor(globals.time / JITTER_PERIOD));
     let jitter_mul_pos = mix(0.975, 1.025, rand_f(&seed));
     let jitter_mul_uv = mix(0.99, 1.01, rand_f(&seed));
-    // let jitter_mul = 1.0;
     out.no_scribble_pos = jitter_mul_pos * vertex.position.xz;
 
     var world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
@@ -141,14 +132,11 @@ fn vertex(vertex: Vertex, @builtin(vertex_index) vertex_index: u32) -> ScribbleO
 #ifdef VERTEX_UVS
     let offset_uv = vertex.uv - vec2(0.5);
     out.uv = jitter_mul_uv * jitter_mul_pos * offset_uv + vec2(0.5);
-    // no_scribble_uv = jitter_mul_pos * offset_uv + vec2(0.5);
-    // out.uv = vertex.uv;
 #endif
 
 #ifdef VERTEX_UVS_B
     let offset_uv_b = vertex.uv_b - vec2(0.5);
     out.uv_b = jitter_mul_uv * jitter_mul_pos * offset_uv_b + vec2(0.5);
-    // out.uv_b = vertex.uv_b;
 #endif
 
 #ifdef VERTEX_TANGENTS
@@ -175,18 +163,12 @@ fn vertex(vertex: Vertex, @builtin(vertex_index) vertex_index: u32) -> ScribbleO
     return out;
 }
 
-// in uv units oops
+// in mesh local units
 const GRID_SPACING: f32 = 0.4;
 const PAPER_COLOR: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
 const GRID_COLOR: vec3<f32> = vec3<f32>(0.57, 0.79, 0.83);
 const GRID_START_DIST: f32 = 0.01;
 const GRID_END_DIST: f32 = 0.03;
-
-// @fragment
-// fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-//     // return vec4(1.0, 0.0, 0.0, 1.0);
-// }
-
 
 @fragment
 fn fragment(
@@ -211,13 +193,11 @@ fn fragment(
     let alpha = pbr_input.material.base_color.a;
     let sampled_color = pbr_input.material.base_color.rgb;
     pbr_input.material.base_color = vec4(mix(paper_color, sampled_color, alpha), 1.0);
-    // pbr_input.material.base_color = vec4(no_scribble_pos, 0.0, 1.0);
 
     // alpha discard
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
 
 #ifdef PREPASS_PIPELINE
-    // in deferred mode we can't modify anything after that, as lighting is run in a separate fullscreen shader.
     let out = deferred_output(in, pbr_input);
 #else
     var out: FragmentOutput;

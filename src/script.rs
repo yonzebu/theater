@@ -1,7 +1,19 @@
 use std::{borrow::Cow, error::Error, fmt::Display};
 
-use bevy::{asset::{AssetLoader, io::Reader}, prelude::*};
-use nom::{branch::alt, bytes::complete::{tag, take_while}, character::complete::{line_ending, multispace0}, combinator::{eof, peek, rest}, error::ParseError, multi::{fold_many0, many0, many0_count}, sequence::{delimited, preceded, terminated, tuple}, IResult, InputLength, InputTakeAtPosition, Parser};
+use bevy::{
+    asset::{io::Reader, AssetLoader},
+    prelude::*,
+};
+use nom::{
+    branch::alt,
+    bytes::complete::tag,
+    character::complete::{line_ending, multispace0},
+    combinator::{eof, peek, rest},
+    error::ParseError,
+    multi::{fold_many0, many0},
+    sequence::{delimited, preceded, terminated, tuple},
+    IResult, InputLength, Parser,
+};
 
 #[derive(Debug, Clone)]
 struct Answer {
@@ -13,7 +25,7 @@ struct Answer {
 #[derive(Debug, Clone)]
 enum AnswerBlock {
     Single(String),
-    Multi(Vec<Answer>)
+    Multi(Vec<Answer>),
 }
 
 #[derive(Debug, Clone)]
@@ -34,15 +46,27 @@ fn strip_whitespace<'a>(input: &'a str) -> IResult<&'a str, &'a str> {
 }
 
 fn prompt<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
-    delimited(line_starter(">"), strip_whitespace, Parser::or(line_ending, eof))(lines)
+    delimited(
+        line_starter(">"),
+        strip_whitespace,
+        Parser::or(line_ending, eof),
+    )(lines)
 }
 
 fn answer<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
-    delimited(line_starter("-"), strip_whitespace, Parser::or(line_ending, eof))(lines)
+    delimited(
+        line_starter("-"),
+        strip_whitespace,
+        Parser::or(line_ending, eof),
+    )(lines)
 }
 
 fn end<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
-    delimited(line_starter("!"), strip_whitespace, Parser::or(line_ending, eof))(lines)
+    delimited(
+        line_starter("!"),
+        strip_whitespace,
+        Parser::or(line_ending, eof),
+    )(lines)
 }
 
 fn line<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
@@ -60,41 +84,43 @@ where
     I: Clone + InputLength,
     F: Parser<I, O1, E>,
     S: Parser<I, O2, E>,
-    E: ParseError<I>
+    E: ParseError<I>,
 {
     preceded(fold_many0(to_skip, || (), |_, _| ()), parser)
 }
 
 fn prompt_block<'a>(lines: &'a str) -> IResult<&'a str, ScriptEntry> {
     let (lines, (prompt, answer_block)) = (tuple((
-        skip_while(empty, prompt), 
+        skip_while(empty, prompt),
         alt((
-            tuple((
-                skip_while(empty, answer), 
-                peek(skip_while(empty, prompt))
-            ))
+            tuple((skip_while(empty, answer), peek(skip_while(empty, prompt))))
                 .map(|(answer, _)| AnswerBlock::Single(answer.into())),
-            many0(
-                alt((
-                    tuple((
-                        skip_while(empty, answer),
-                        skip_while(empty, end)
-                    ))
-                        .map(|(answer, line)| Answer { answer: answer.into(), response: line.into(), is_end: true }),
-                    tuple((
-                        skip_while(empty, answer),
-                        skip_while(empty, line)
-                    ))
-                        .map(|(answer, line)| Answer { answer: answer.into(), response: line.into(), is_end: false }),
-                ))
-            )
-                .map(AnswerBlock::Multi)
-        ))
+            many0(alt((
+                tuple((skip_while(empty, answer), skip_while(empty, end))).map(|(answer, line)| {
+                    Answer {
+                        answer: answer.into(),
+                        response: line.into(),
+                        is_end: true,
+                    }
+                }),
+                tuple((skip_while(empty, answer), skip_while(empty, line))).map(
+                    |(answer, line)| Answer {
+                        answer: answer.into(),
+                        response: line.into(),
+                        is_end: false,
+                    },
+                ),
+            )))
+            .map(AnswerBlock::Multi),
+        )),
     )))(lines)?;
-    Ok((lines, ScriptEntry::Prompt {
-        prompt: prompt.into(),
-        choices: answer_block
-    }))
+    Ok((
+        lines,
+        ScriptEntry::Prompt {
+            prompt: prompt.into(),
+            choices: answer_block,
+        },
+    ))
 }
 
 fn line_block<'a>(lines: &'a str) -> IResult<&'a str, ScriptEntry> {
@@ -102,26 +128,22 @@ fn line_block<'a>(lines: &'a str) -> IResult<&'a str, ScriptEntry> {
 }
 
 fn parse_entries<'a>(lines: &'a str) -> IResult<&'a str, Vec<ScriptEntry>> {
-    many0(alt((
-        prompt_block,
-        line_block
-    )))(lines)
+    many0(alt((prompt_block, line_block)))(lines)
 }
 
 #[derive(Debug, Asset, TypePath)]
 pub struct Script {
     raw: Cow<'static, str>,
-    entries: Vec<ScriptEntry>
+    entries: Vec<ScriptEntry>,
 }
 
 impl Script {
-    pub fn from_raw(raw: impl Into<Cow<'static, str>>) -> Result<Self, nom::Err<nom::error::Error<String>>> {
+    pub fn from_raw(
+        raw: impl Into<Cow<'static, str>>,
+    ) -> Result<Self, nom::Err<nom::error::Error<String>>> {
         let raw: Cow<'static, str> = raw.into();
         let (extra_input, entries) = parse_entries(&raw).map_err(|e| e.map_input(|s| s.into()))?;
-        Ok(Script {
-            raw,
-            entries
-        })
+        Ok(Script { raw, entries })
     }
 }
 
@@ -132,7 +154,7 @@ struct ScriptLoader;
 enum ScriptLoadError {
     Io(std::io::Error),
     Utf8(std::string::FromUtf8Error),
-    Parse(nom::Err<nom::error::Error<String>>)
+    Parse(nom::Err<nom::error::Error<String>>),
 }
 
 impl Display for ScriptLoadError {
@@ -140,7 +162,7 @@ impl Display for ScriptLoadError {
         match self {
             Self::Io(e) => e.fmt(f),
             Self::Utf8(e) => e.fmt(f),
-            Self::Parse(e) => e.fmt(f)
+            Self::Parse(e) => e.fmt(f),
         }
     }
 }
@@ -150,7 +172,7 @@ impl Error for ScriptLoadError {
         match self {
             Self::Io(e) => Some(e),
             Self::Utf8(e) => Some(e),
-            Self::Parse(e) => Some(e)
+            Self::Parse(e) => Some(e),
         }
     }
 }
@@ -166,7 +188,10 @@ impl AssetLoader for ScriptLoader {
         load_context: &mut bevy::asset::LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
         let mut buf = Vec::new();
-        reader.read_to_end(&mut buf).await.map_err(ScriptLoadError::Io)?;
+        reader
+            .read_to_end(&mut buf)
+            .await
+            .map_err(ScriptLoadError::Io)?;
         Script::from_raw(String::from_utf8(buf).map_err(ScriptLoadError::Utf8)?)
             .map_err(ScriptLoadError::Parse)
     }

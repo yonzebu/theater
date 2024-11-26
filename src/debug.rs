@@ -1,5 +1,8 @@
-use bevy::{diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin}, math::vec3, prelude::*};
-use core::fmt;
+use bevy::{
+    diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
+    math::vec3,
+    prelude::*,
+};
 use std::fmt::{Debug, Write};
 
 #[derive(Component, Reflect)]
@@ -22,7 +25,7 @@ fn debug_freecam(
     let z = (s - w) as f32;
     for mut cam_transform in main_camera.iter_mut() {
         cam_transform.translation += vec3(x, y, z) * 10. * dt;
-        
+
         if keyboard.just_pressed(KeyCode::ArrowLeft) {
             cam_transform.look_to(Dir3::NEG_X, Dir3::Y);
         }
@@ -75,10 +78,13 @@ fn spawn_fps_display(mut commands: Commands) {
 
 fn update_fps_display(
     mut fps_displays: Query<&mut Text, With<FpsDisplay>>,
-    diagnostics: Res<DiagnosticsStore>
+    diagnostics: Res<DiagnosticsStore>,
 ) {
     let diagnostic = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS).unwrap();
-    let fps = diagnostic.measurement().map(|measurement| measurement.value).unwrap_or(0.);
+    let fps = diagnostic
+        .measurement()
+        .map(|measurement| measurement.value)
+        .unwrap_or(0.);
     let avg_fps = diagnostic.average().unwrap_or(0.);
     for mut fps_display in fps_displays.iter_mut() {
         fps_display.0.clear();
