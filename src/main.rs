@@ -10,7 +10,7 @@ mod debug;
 use debug::*;
 use video::{VideoPlugin, VideoStream};
 mod video;
-// mod script;
+mod script;
 
 #[derive(Clone, Asset, TypePath, AsBindGroup)]
 struct Paper {}

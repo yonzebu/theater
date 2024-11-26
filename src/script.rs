@@ -1,7 +1,7 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, error::Error, fmt::Display};
 
-use bevy::prelude::*;
-use nom::{branch::alt, bytes::complete::{tag, take_while}, character::complete::{line_ending, multispace0}, combinator::{eof, peek, rest}, multi::{fold_many0, many0, many0_count}, sequence::{delimited, preceded, terminated, tuple}, IResult, InputTakeAtPosition, Parser};
+use bevy::{asset::{AssetLoader, io::Reader}, prelude::*};
+use nom::{branch::alt, bytes::complete::{tag, take_while}, character::complete::{line_ending, multispace0}, combinator::{eof, peek, rest}, error::ParseError, multi::{fold_many0, many0, many0_count}, sequence::{delimited, preceded, terminated, tuple}, IResult, InputLength, InputTakeAtPosition, Parser};
 
 #[derive(Debug, Clone)]
 struct Answer {
@@ -23,46 +23,6 @@ enum ScriptEntry {
         choices: AnswerBlock,
     },
     Line(String),
-    End(String)
-}
-
-#[derive(Clone, Copy, Debug)]
-// all line &str do not include syntax elements like > or -
-enum ScriptLine<'a> {
-    Prompt(&'a str),
-    // user choice options
-    Answer(&'a str),
-    // plain lines
-    Line(&'a str),
-    End(&'a str),
-    Empty
-}
-
-type NumberedLine<'a> = (usize, ScriptLine<'a>);
-
-#[derive(Debug)]
-enum ErrorKind {
-    Eof,
-    NotPrompt,
-    NotAnswer,
-    NotEnd,
-    NotLine,
-    NotEmpty,
-    Nom(nom::error::ErrorKind)
-}
-
-#[derive(Debug)]
-struct ParseError<I>(I, ErrorKind);
-
-type ScriptResult<I, O> = IResult<I, O, ParseError<I>>;
-
-impl<I> nom::error::ParseError<I> for ParseError<I> {
-    fn from_error_kind(input: I, kind: nom::error::ErrorKind) -> Self {
-        ParseError(input, ErrorKind::Nom(kind))
-    }
-    fn append(input: I, kind: nom::error::ErrorKind, other: Self) -> Self {
-        other
-    }
 }
 
 fn line_starter<'a>(starter: &'a str) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str> {
@@ -93,129 +53,133 @@ fn empty<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
     terminated(strip_whitespace, Parser::or(line_ending, eof))(lines)
 }
 
-fn parse_line<'a>(lines: &'a str) -> IResult<&'a str, ScriptLine<'a>> {
-    alt((
-        empty.map(|_| ScriptLine::Empty),
-        prompt.map(ScriptLine::Prompt),
-        answer.map(ScriptLine::Answer),
-        end.map(ScriptLine::End),
-        line.map(ScriptLine::Line)
-    ))(lines)
-}
-
-fn prompt_line<'a, 'b>(lines: &'b [NumberedLine<'a>]) -> ScriptResult<&'b [NumberedLine<'a>], NumberedLine<'a>> {
-    match lines.get(0) {
-        None => Err(nom::Err::Error(ParseError(lines, ErrorKind::Eof))),
-        Some(&numbered_line) if matches!(numbered_line.1, ScriptLine::Prompt(_)) => Ok((&lines[1..], numbered_line)),
-        _ => Err(nom::Err::Error(ParseError(lines, ErrorKind::NotPrompt)))
-    }
-}
-
-fn answer_line<'a, 'b>(lines: &'b [NumberedLine<'a>]) -> ScriptResult<&'b [NumberedLine<'a>], NumberedLine<'a>> {
-    match lines.get(0) {
-        None => Err(nom::Err::Error(ParseError(lines, ErrorKind::Eof))),
-        Some(&numbered_line) if matches!(numbered_line.1, ScriptLine::Answer(_)) => Ok((&lines[1..], numbered_line)),
-        _ => Err(nom::Err::Error(ParseError(lines, ErrorKind::NotAnswer)))
-    }
-}
-
-fn end_line<'a, 'b>(lines: &'b [NumberedLine<'a>]) -> ScriptResult<&'b [NumberedLine<'a>], NumberedLine<'a>> {
-    match lines.get(0) {
-        None => Err(nom::Err::Error(ParseError(lines, ErrorKind::Eof))),
-        Some(&numbered_line) if matches!(numbered_line.1, ScriptLine::End(_)) => Ok((&lines[1..], numbered_line)),
-        _ => Err(nom::Err::Error(ParseError(lines, ErrorKind::NotEnd)))
-    }
-}
-
-fn line_line<'a, 'b>(lines: &'b [NumberedLine<'a>]) -> ScriptResult<&'b [NumberedLine<'a>], NumberedLine<'a>> {
-    match lines.get(0) {
-        None => Err(nom::Err::Error(ParseError(lines, ErrorKind::Eof))),
-        Some(&numbered_line) if matches!(numbered_line.1, ScriptLine::Line(_)) => Ok((&lines[1..], numbered_line)),
-        _ => Err(nom::Err::Error(ParseError(lines, ErrorKind::NotLine)))
-    }
-}
-
-fn empty_line<'a, 'b>(lines: &'b [NumberedLine<'a>]) -> ScriptResult<&'b [NumberedLine<'a>], NumberedLine<'a>> {
-    match lines.get(0) {
-        None => Err(nom::Err::Error(ParseError(lines, ErrorKind::Eof))),
-        Some(&numbered_line) if matches!(numbered_line.1, ScriptLine::Empty) => Ok((&lines[1..], numbered_line)),
-        _ => Err(nom::Err::Error(ParseError(lines, ErrorKind::NotEmpty)))
-    }
-}
-
-fn matches_empty(line: &NumberedLine<'_>) -> bool {
-    matches!(line, (_, ScriptLine::Empty))
-}
-
-fn skip_while<I, O, F, E, P>(cond: P, parser: F) -> impl FnMut(I) -> IResult<I, O, E> 
+/// skips while the first parser has input. kinda like preceded but runs the first parser until it fails.
+/// maybe this exists in nom already but i didn't find something equivalent
+fn skip_while<I, O1, O2, F, S, E>(to_skip: S, parser: F) -> impl FnMut(I) -> IResult<I, O1, E>
 where
-    I: InputTakeAtPosition,
-    E: nom::error::ParseError<I>,
-    F: Parser<I, O, E>,
-    P: Fn(I::Item) -> bool
+    I: Clone + InputLength,
+    F: Parser<I, O1, E>,
+    S: Parser<I, O2, E>,
+    E: ParseError<I>
 {
-    preceded(take_while(cond), parser)
+    preceded(fold_many0(to_skip, || (), |_, _| ()), parser)
 }
 
-fn prompt_block<'a, 'b>(lines: &'b [NumberedLine<'a>]) -> ScriptResult<&'b [NumberedLine<'a>], ScriptNode> {
-    let (a, b) = (tuple((
-        skip_while(matches_empty, prompt_line), 
+fn prompt_block<'a>(lines: &'a str) -> IResult<&'a str, ScriptEntry> {
+    let (lines, (prompt, answer_block)) = (tuple((
+        skip_while(empty, prompt), 
         alt((
             tuple((
-                skip_while(matches_empty, answer_line), 
-                peek(skip_while(matches_empty, prompt_line))
+                skip_while(empty, answer), 
+                peek(skip_while(empty, prompt))
             ))
-                .map(|((answer, _), (prompt, _))| vec![Answer { line: answer, next: prompt }]),
+                .map(|(answer, _)| AnswerBlock::Single(answer.into())),
             many0(
-                tuple((
-                    skip_while(matches_empty, answer_line),
-                    skip_while(matches_empty, line_line)
+                alt((
+                    tuple((
+                        skip_while(empty, answer),
+                        skip_while(empty, end)
+                    ))
+                        .map(|(answer, line)| Answer { answer: answer.into(), response: line.into(), is_end: true }),
+                    tuple((
+                        skip_while(empty, answer),
+                        skip_while(empty, line)
+                    ))
+                        .map(|(answer, line)| Answer { answer: answer.into(), response: line.into(), is_end: false }),
                 ))
-                    .map(|((answer, _), (response, _))| Answer { line: answer, next: response })
             )
+                .map(AnswerBlock::Multi)
         ))
     )))(lines)?;
+    Ok((lines, ScriptEntry::Prompt {
+        prompt: prompt.into(),
+        choices: answer_block
+    }))
 }
 
-fn parse_lines<'a>(lines: &'a str) -> IResult<&'a str, Vec<ScriptNode>> {
-    let mut index = 0_usize;
-    let (input, nodes) = fold_many0(
-        parse_line.map(move |line| {
-            let i = index;
-            index += 1;
-            (i, line)
-        }), 
-        Vec::new, 
-        |mut nodes, (index, line)| {
+fn line_block<'a>(lines: &'a str) -> IResult<&'a str, ScriptEntry> {
+    skip_while(empty, line)(lines).map(|(input, line)| (input, ScriptEntry::Line(line.into())))
+}
 
-        }
-    )(lines)?;
+fn parse_entries<'a>(lines: &'a str) -> IResult<&'a str, Vec<ScriptEntry>> {
+    many0(alt((
+        prompt_block,
+        line_block
+    )))(lines)
 }
 
 #[derive(Debug, Asset, TypePath)]
 pub struct Script {
     raw: Cow<'static, str>,
-    lines: Vec<String>,
-    nodes: Vec<ScriptNode>
+    entries: Vec<ScriptEntry>
 }
 
 impl Script {
-    pub fn from_raw(raw: impl Into<Cow<'static, str>>) -> Option<Self> {
+    pub fn from_raw(raw: impl Into<Cow<'static, str>>) -> Result<Self, nom::Err<nom::error::Error<String>>> {
         let raw: Cow<'static, str> = raw.into();
-        let mut lines = Vec::new();
-        for line in raw.lines().filter(|s| !s.is_empty()) {
-            lines.push(line.into());
-        }
-        None
+        let (extra_input, entries) = parse_entries(&raw).map_err(|e| e.map_input(|s| s.into()))?;
+        Ok(Script {
+            raw,
+            entries
+        })
     }
 }
 
+#[derive(Default)]
 struct ScriptLoader;
+
+#[derive(Debug)]
+enum ScriptLoadError {
+    Io(std::io::Error),
+    Utf8(std::string::FromUtf8Error),
+    Parse(nom::Err<nom::error::Error<String>>)
+}
+
+impl Display for ScriptLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => e.fmt(f),
+            Self::Utf8(e) => e.fmt(f),
+            Self::Parse(e) => e.fmt(f)
+        }
+    }
+}
+
+impl Error for ScriptLoadError {
+    fn cause(&self) -> Option<&dyn Error> {
+        match self {
+            Self::Io(e) => Some(e),
+            Self::Utf8(e) => Some(e),
+            Self::Parse(e) => Some(e)
+        }
+    }
+}
+
+impl AssetLoader for ScriptLoader {
+    type Asset = Script;
+    type Error = ScriptLoadError;
+    type Settings = ();
+    async fn load(
+        &self,
+        reader: &mut dyn Reader,
+        settings: &Self::Settings,
+        load_context: &mut bevy::asset::LoadContext<'_>,
+    ) -> Result<Self::Asset, Self::Error> {
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).await.map_err(ScriptLoadError::Io)?;
+        Script::from_raw(String::from_utf8(buf).map_err(ScriptLoadError::Utf8)?)
+            .map_err(ScriptLoadError::Parse)
+    }
+    fn extensions(&self) -> &[&str] {
+        &["txt"]
+    }
+}
 
 pub struct ScriptPlugin;
 
 impl Plugin for ScriptPlugin {
     fn build(&self, app: &mut App) {
-
+        app.init_asset::<Script>()
+            .init_asset_loader::<ScriptLoader>();
     }
 }
