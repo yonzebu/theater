@@ -222,7 +222,10 @@ impl AssetLoader for ScriptLoader {
     }
 }
 
-pub enum UpdateRunner {}
+pub enum UpdateRunner {
+    NextLine,
+
+}
 
 // a nicer version of this would have runners/choices automatically add/remove each other with 
 // component hooks but that's not insignificant effort and i need to get this done
@@ -281,6 +284,13 @@ pub struct ScriptChoices {
 }
 
 impl ScriptChoices {
+    pub fn new(runner: Entity) -> Self {
+        ScriptChoices {
+            runner,
+            active_choice: 0,
+        }
+    }
+
     fn show_choices_systems() {
 
     }
