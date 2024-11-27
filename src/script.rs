@@ -1,7 +1,7 @@
 use std::{borrow::Cow, error::Error, fmt::Display, time::Duration};
 
 use bevy::{
-    asset::{io::Reader, AssetLoader}, ecs::component::StorageType, prelude::*, time::Stopwatch
+    asset::{io::Reader, AssetLoader}, ecs::component::StorageType, prelude::*, scene::ron::de, time::Stopwatch
 };
 use nom::{
     branch::alt,
@@ -222,12 +222,148 @@ impl AssetLoader for ScriptLoader {
     }
 }
 
+pub enum UpdateRunner {}
+
+// a nicer version of this would have runners/choices automatically add/remove each other with 
+// component hooks but that's not insignificant effort and i need to get this done
+#[derive(Component)]
+#[require(Text)]
+pub struct ScriptRunner {
+    script: Handle<Script>,
+    choices_display: Entity,
+    /// index of the current ScriptEntry
+    current_entry: usize,
+    /// if this is None, the text currently being displayed is either a single line (if 
+    /// `current_entry` refers to a `ScriptEntry::Line`) or a prompt (`current_entry` refers to a 
+    /// `ScriptEntry::Prompt`). if `current_entry` refers to a `Prompt` with 
+    /// `choices = AnswerBlock::Multi(choice_vec)`, this is `Some(i)` where 
+    /// `choice_vec[i].response` is the text currently being displayed.
+    current_answer: Option<usize>,
+    /// number of bytes displayed so far
+    displayed_bytes: usize,
+    display_timer: Timer,
+    /// time since the current line starting displaying in timer ticks
+    display_ticks: u32,
+    /// the tick time of the last displayed char
+    last_displayed_tick: u32,
+}
+
+impl ScriptRunner {
+    pub fn new(script: Handle<Script>, choices_display: Entity, text_speed: f32) -> Self {
+        ScriptRunner {
+            script,
+            choices_display,
+            current_entry: 0,
+            current_answer: None,
+            displayed_bytes: 0,
+            display_timer: Timer::new(Duration::from_secs_f32(1. / text_speed), TimerMode::Repeating),
+            display_ticks: 0,
+            last_displayed_tick: 0
+        }
+    }
+    pub fn pause(&mut self) {
+        self.display_timer.pause();
+    }
+    pub fn unpause(&mut self) {
+        self.display_timer.unpause();
+    }
+    pub fn paused(&self) -> bool {
+        self.display_timer.paused()
+    }
+}
+
+#[derive(Component)]
+#[require(Node)]
+pub struct ScriptChoices {
+    runner: Entity,
+    // for highlighting n stuff
+    active_choice: usize,
+}
+
+impl ScriptChoices {
+    fn show_choices_systems() {
+
+    }
+}
+
+#[derive(Component)]
+#[require(Text)]
+pub struct ScriptChoice(usize);
+
+fn update_script_runner_text(
+    mut commands: Commands,
+    mut runners: Query<(&mut ScriptRunner, &mut Text)>,
+    mut choice_displays: Query<(&ScriptChoice, &Node, &Children)>,
+    scripts: Res<Assets<Script>>,
+    time: Res<Time>
+) {
+    for (mut runner, mut text) in runners.iter_mut() {
+        let runner = &mut *runner;
+        runner.display_ticks += runner.display_timer.tick(time.delta()).times_finished_this_tick();
+
+        let Some(script) = scripts.get(runner.script.id()) else {
+            continue;
+        };
+        let Some(entry) = script.get_entry(runner.current_entry) else {
+            continue;
+        };
+        let mut extend_text = |s: &str| {
+            let mut new_bytes = 0;
+            // oh no
+            text.0.extend(
+                s[runner.displayed_bytes..]
+                    .chars()
+                    .map(|c| {
+                        match c {
+                            '.' | '?' | '-' | '!' => (c, 6),
+                            ',' => (c, 3),
+                            _ => (c, 1)
+                        }
+                    })
+                    .take_while(|(_, ticks)| {
+                        if runner.last_displayed_tick < runner.display_ticks {
+                            runner.last_displayed_tick += ticks;
+                            true
+                        } else {
+                            false
+                        }
+                    })
+                    .map(|(c, _)| {                        
+                        new_bytes += c.len_utf8();
+                        c
+                    })
+            );
+            runner.displayed_bytes += new_bytes;
+        };
+        let text_len;
+        match (entry, runner.current_answer) {
+            (ScriptEntry::Line(line), None) => {
+                extend_text(line);
+                text_len = line.as_bytes().len();
+            }
+            (ScriptEntry::Prompt { prompt, .. }, None) => {
+                extend_text(prompt);
+                text_len = prompt.as_bytes().len();
+            }
+            (ScriptEntry::Prompt { choices: AnswerBlock::Multi(answers), .. }, Some(answer_index)) => {
+                extend_text(&answers[answer_index].response);
+                text_len = answers[answer_index].response.as_bytes().len();
+            }
+            _ => unreachable!()
+        }
+        if runner.displayed_bytes >= text_len {
+            // finished displaying?
+        }
+    }
+}
+
 pub struct ScriptPlugin;
 
 impl Plugin for ScriptPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<Script>()
-            .init_asset_loader::<ScriptLoader>();
+            .init_asset_loader::<ScriptLoader>()
+            .add_systems(Update, update_script_runner_text);
     }
 }
 
@@ -243,7 +379,10 @@ mod tests {
             "\t ",
         ];
         for &empty in empties {
-            assert_eq!(Script::from_raw(empty), Ok(Script { raw: Cow::Borrowed(empty), entries: vec![] }));
+            assert_eq!(
+                Script::from_raw(empty), 
+                Ok(Script { raw: Cow::Borrowed(empty), entries: vec![] })
+            );
         }
     }
 

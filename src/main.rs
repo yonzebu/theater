@@ -6,6 +6,7 @@ use bevy::{math::vec3, prelude::*};
 
 mod debug;
 use debug::*;
+use script::{ScriptPlugin, ScriptRunner};
 use video::{VideoPlugin, VideoStream};
 mod script;
 mod video;
@@ -47,7 +48,6 @@ where
     }
 }
 
-// #[derive(Component)]
 struct WaitingForLoads;
 
 impl Component for WaitingForLoads {
@@ -178,12 +178,25 @@ fn setup(
         }
     }
 
+    let script = assets.load("nonfinal/testscript.txt");
+    let mut runner = ScriptRunner::new(script.clone(), Entity::PLACEHOLDER, 10.0);
+    runner.pause();
+    commands.spawn((
+        Node { 
+            display: Display::Flex, 
+            margin: UiRect::horizontal(Val::Percent(10.)).with_top(Val::Percent(35.)).with_bottom(Val::Percent(10.)),
+            ..default()
+        },
+        BackgroundColor(Color::linear_rgb(1., 0., 0.)),
+    )).with_child(runner);
+
     commands.insert_resource(AssetsToLoad(vec![
         me_image.id().untyped(),
         me_mesh.id().untyped(),
         you_image.id().untyped(),
         you_mesh.id().untyped(),
         chair.id().untyped(),
+        script.id().untyped(),
     ]));
 }
 
@@ -247,7 +260,18 @@ fn check_loaded_state(
     }
 }
 
-fn update() {}
+fn update(mut runners: Query<&mut ScriptRunner>, keyboard: Res<ButtonInput<KeyCode>>) {
+    if !keyboard.just_pressed(KeyCode::KeyT) {
+        return;
+    }
+    for mut runner in runners.iter_mut() {
+        if runner.paused() {
+            runner.unpause();
+        } else {
+            runner.pause();
+        }
+    }
+}
 
 fn main() {
     App::new()
@@ -256,6 +280,7 @@ fn main() {
             MaterialPlugin::<ExtendedMaterial<StandardMaterial, Paper>>::default(),
             DebugPlugin,
             VideoPlugin,
+            ScriptPlugin
         ))
         .add_systems(Startup, setup)
         .add_systems(
