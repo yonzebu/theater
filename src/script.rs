@@ -6,29 +6,29 @@ use bevy::{
 };
 use nom::{
     branch::alt,
-    bytes::complete::tag,
+    bytes::complete::{tag, take_till, take_till1},
     character::complete::{line_ending, multispace0},
-    combinator::{eof, peek, rest},
+    combinator::{eof, peek, rest, verify},
     error::ParseError,
     multi::{fold_many0, many0},
     sequence::{delimited, preceded, terminated, tuple},
     IResult, InputLength, Parser,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Answer {
     answer: String,
     response: String,
     is_end: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum AnswerBlock {
     Single(String),
     Multi(Vec<Answer>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ScriptEntry {
     Prompt {
         prompt: String,
@@ -41,14 +41,24 @@ fn line_starter<'a>(starter: &'a str) -> impl FnMut(&'a str) -> IResult<&'a str,
     preceded(multispace0, tag(starter))
 }
 
-fn strip_whitespace<'a>(input: &'a str) -> IResult<&'a str, &'a str> {
-    delimited(multispace0, rest, multispace0)(input)
+fn till_newline0(input: &str) -> IResult<&str, &str> {
+    take_till(|c| c == '\r' || c == '\n')(input)
 }
+
+fn till_newline1(input: &str) -> IResult<&str, &str> {
+    take_till1(|c| c == '\r' || c == '\n')(input)
+}
+
+// fn strip_whitespace(s: &str) -> &str {
+//     s.trim
+//     let stripped_prefix = s.start(|c: char| c.is_whitespace()).unwrap_or(s);
+//     stripped_prefix.strip_suffix(|c: char| c.is_whitespace()).unwrap_or(stripped_prefix)
+// }
 
 fn prompt<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
     delimited(
         line_starter(">"),
-        strip_whitespace,
+        till_newline1.map(str::trim),
         Parser::or(line_ending, eof),
     )(lines)
 }
@@ -56,7 +66,7 @@ fn prompt<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
 fn answer<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
     delimited(
         line_starter("-"),
-        strip_whitespace,
+        till_newline1.map(str::trim),
         Parser::or(line_ending, eof),
     )(lines)
 }
@@ -64,17 +74,17 @@ fn answer<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
 fn end<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
     delimited(
         line_starter("!"),
-        strip_whitespace,
+        till_newline1.map(str::trim),
         Parser::or(line_ending, eof),
     )(lines)
 }
 
 fn line<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
-    terminated(strip_whitespace, Parser::or(line_ending, eof))(lines)
+    verify(terminated(till_newline1.map(str::trim), Parser::or(line_ending, eof)), |s: &str| s.len() > 0)(lines)
 }
 
 fn empty<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
-    terminated(strip_whitespace, Parser::or(line_ending, eof))(lines)
+    verify(terminated(till_newline0, line_ending), |s: &str| s.trim().len() == 0)(lines)
 }
 
 /// skips while the first parser has input. kinda like preceded but runs the first parser until it fails.
@@ -131,7 +141,7 @@ fn parse_entries<'a>(lines: &'a str) -> IResult<&'a str, Vec<ScriptEntry>> {
     many0(alt((prompt_block, line_block)))(lines)
 }
 
-#[derive(Debug, Asset, TypePath)]
+#[derive(Debug, Asset, TypePath, PartialEq, Eq)]
 pub struct Script {
     raw: Cow<'static, str>,
     entries: Vec<ScriptEntry>,
@@ -206,5 +216,107 @@ impl Plugin for ScriptPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<Script>()
             .init_asset_loader::<ScriptLoader>();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_script_parses() {
+        let empties = &[
+            "",
+            "   ",
+            "\t ",
+        ];
+        for &empty in empties {
+            assert_eq!(Script::from_raw(empty), Ok(Script { raw: Cow::Borrowed(empty), entries: vec![] }));
+        }
+    }
+
+    #[test]
+    fn single_line_parses() {
+        let lines = &[
+            "test",
+            " test",
+            "test ",
+            "test\n",
+            " test \r\n"
+        ];
+        for &line in lines {
+            assert_eq!(
+                Script::from_raw(line), 
+                Ok(Script { 
+                    raw: Cow::Borrowed(line), 
+                    entries: vec![ScriptEntry::Line(line.trim().into())] 
+                })
+            );
+        }
+        
+    }
+
+    #[test]
+    fn prompt_block_parses() {
+        let single_answer = ">prompt\r\n\n\n-   answer\n>next prompt\n-next 1\nnext response 1\n-next 2\nnext response 2";
+        assert_eq!(
+            Script::from_raw(single_answer), 
+            Ok(Script { 
+                raw: single_answer.into(), 
+                entries: vec![
+                    ScriptEntry::Prompt {
+                        prompt: "prompt".into(),
+                        choices: AnswerBlock::Single("answer".into())
+                    },
+                    ScriptEntry::Prompt { 
+                        prompt: "next prompt".into(), 
+                        choices: AnswerBlock::Multi(vec![
+                            Answer { answer: "next 1".into(), response: "next response 1".into(), is_end: false },
+                            Answer { answer: "next 2".into(), response: "next response 2".into(), is_end: false },
+                        ]) 
+                    }
+                ]
+            })
+        );
+
+        let multi_answer = ">prompt\n\n\r\n- answer1  \r\n response1\t\n-answer2\r\nresponse2\n-end answer\n\r\n!end response";
+        assert_eq!(
+            Script::from_raw(multi_answer), 
+            Ok(Script { 
+                raw: multi_answer.into(), 
+                entries: vec![ScriptEntry::Prompt { 
+                    prompt: "prompt".into(), 
+                    choices: AnswerBlock::Multi(vec![
+                        Answer { answer: "answer1".into(), response: "response1".into(), is_end: false },
+                        Answer { answer: "answer2".into(), response: "response2".into(), is_end: false },
+                        Answer { answer: "end answer".into(), response: "end response".into(), is_end: true },
+                    ]) 
+                }]
+            })
+        );
+    }
+
+    #[test]
+    fn mixed_blocks_parse() {
+        let to_parse = "line 1\n> prompt \r\n-   answer\n response  \r\n line 2\n \n line 3 \r\n";
+        assert_eq!(
+            Script::from_raw(to_parse),
+            Ok(Script {
+                raw: to_parse.into(),
+                entries: vec![
+                    ScriptEntry::Line("line 1".into()),
+                    ScriptEntry::Prompt { 
+                        prompt: "prompt".into(), 
+                        choices: AnswerBlock::Multi(vec![Answer { 
+                            answer: "answer".into(), 
+                            response: "response".into(), 
+                            is_end: false 
+                        }])
+                    },
+                    ScriptEntry::Line("line 2".into()),
+                    ScriptEntry::Line("line 3".into()),
+                ]
+            })
+        );
     }
 }
