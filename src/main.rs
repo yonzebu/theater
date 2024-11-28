@@ -1,5 +1,6 @@
 use bevy::asset::UntypedAssetId;
-use bevy::ecs::component;
+use bevy::ecs::component::ComponentId;
+use bevy::ecs::world::DeferredWorld;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::render::render_resource::{AsBindGroup, ShaderRef};
 use bevy::{math::vec3, prelude::*};
@@ -7,7 +8,7 @@ use bevy::{math::vec3, prelude::*};
 mod debug;
 use debug::*;
 use script::{ScriptChoices, ScriptPlugin, ScriptRunner};
-use video::{VideoPlugin, VideoStream};
+use video::{VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream};
 mod script;
 mod video;
 
@@ -22,10 +23,6 @@ impl MaterialExtension for Paper {
         "paper.wgsl".into()
     }
 }
-
-#[derive(Component)]
-#[component(storage = "SparseSet")]
-struct VideoPlayer(Handle<VideoStream>);
 
 #[derive(Component)]
 #[component(storage = "SparseSet")]
@@ -48,21 +45,20 @@ where
     }
 }
 
+#[derive(Component)]
+#[component(on_add = WaitingForLoads::on_add)]
 struct WaitingForLoads;
 
-impl Component for WaitingForLoads {
-    const STORAGE_TYPE: component::StorageType = component::StorageType::Table;
-    fn register_component_hooks(hooks: &mut component::ComponentHooks) {
-        hooks.on_add(|mut deferred_world, entity, _| {
-            if let Some(mut visibility) = deferred_world.get_mut::<Visibility>(entity) {
-                *visibility = Visibility::Hidden;
-            } else {
-                deferred_world
-                    .commands()
-                    .entity(entity)
-                    .insert(Visibility::Hidden);
-            }
-        });
+impl WaitingForLoads {
+    fn on_add(mut deferred_world: DeferredWorld, entity: Entity, _: ComponentId) {
+        if let Some(mut visibility) = deferred_world.get_mut::<Visibility>(entity) {
+            *visibility = Visibility::Hidden;
+        } else {
+            deferred_world
+                .commands()
+                .entity(entity)
+                .insert(Visibility::Hidden);
+        }
     }
 }
 
@@ -181,72 +177,89 @@ fn setup(
     let script = assets.load("nonfinal/testscript.txt");
     let mut script_runner = ScriptRunner::new(script.clone(), Entity::PLACEHOLDER, 10.0);
     script_runner.pause();
-    let root = commands.spawn((Node {
-        flex_direction: FlexDirection::ColumnReverse,
-        align_self: AlignSelf::Stretch,
-        justify_self: JustifySelf::Stretch,
-        flex_wrap: FlexWrap::NoWrap,
-        justify_content: JustifyContent::FlexStart,
-        align_items: AlignItems::End,
-        align_content: AlignContent::Center,
-        padding: UiRect::horizontal(Val::VMin(30.)).with_bottom(Val::VMin(1.)),
-        ..default()
-    }, Visibility::Inherited)).id();
-    let text_box_wrapper = commands.spawn((Node {
-        align_self: AlignSelf::Stretch,
-        height: Val::Percent(20.),
-        margin: UiRect::horizontal(Val::VMin(5.)),
-        ..default()
-    }, )).id();
-    let text_visible_box = commands.spawn((
-        Node { 
-            display: Display::Flex, 
-            border: UiRect::all(Val::VMin(1.5)),
-            width: Val::Percent(100.),
-            height: Val::Percent(100.),
-            padding: UiRect::all(Val::VMin(1.)),
+    let root = commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::ColumnReverse,
+                align_self: AlignSelf::Stretch,
+                justify_self: JustifySelf::Stretch,
+                flex_wrap: FlexWrap::NoWrap,
+                justify_content: JustifyContent::FlexStart,
+                align_items: AlignItems::End,
+                align_content: AlignContent::Center,
+                padding: UiRect::horizontal(Val::VMin(30.)).with_bottom(Val::VMin(1.)),
+                ..default()
+            },
+            Visibility::Inherited,
+        ))
+        .id();
+    let text_box_wrapper = commands
+        .spawn((Node {
+            align_self: AlignSelf::Stretch,
+            height: Val::Percent(20.),
+            margin: UiRect::horizontal(Val::VMin(5.)),
             ..default()
-        },
-        BorderRadius::all(Val::Percent(20.)),
-        BorderColor(Color::srgb(0.99, 0.69, 1.)),
-        BackgroundColor(Color::srgba(0.8, 0.43, 1., 0.5)),
-    )).id();
-    let script_runner = commands.spawn((
-        Node { 
-            align_self: AlignSelf::Stretch, 
-            justify_self: JustifySelf::Stretch, 
-            ..default() 
-        }, 
-        script_runner
-    )).id();
+        },))
+        .id();
+    let text_visible_box = commands
+        .spawn((
+            Node {
+                display: Display::Flex,
+                border: UiRect::all(Val::VMin(1.5)),
+                width: Val::Percent(100.),
+                height: Val::Percent(100.),
+                padding: UiRect::all(Val::VMin(1.)),
+                ..default()
+            },
+            BorderRadius::all(Val::Percent(20.)),
+            BorderColor(Color::srgb(0.99, 0.69, 1.)),
+            BackgroundColor(Color::srgba(0.8, 0.43, 1., 0.5)),
+        ))
+        .id();
+    let script_runner = commands
+        .spawn((
+            Node {
+                align_self: AlignSelf::Stretch,
+                justify_self: JustifySelf::Stretch,
+                ..default()
+            },
+            script_runner,
+        ))
+        .id();
     commands.entity(root).add_child(text_box_wrapper);
-    commands.entity(text_box_wrapper).add_child(text_visible_box);
+    commands
+        .entity(text_box_wrapper)
+        .add_child(text_visible_box);
     commands.entity(text_visible_box).add_child(script_runner);
 
-    let choice_box_wrapper = commands.spawn((
-        Node {
+    let choice_box_wrapper = commands
+        .spawn((Node {
             display: Display::Flex,
             margin: UiRect::bottom(Val::Vh(5.)),
             ..default()
-        },
-    )).id();
-    let visible_choice_box = commands.spawn((
-        Node { 
-            display: Display::Flex, 
-            flex_direction: FlexDirection::Column,
-            border: UiRect::all(Val::VMin(0.75)),
-            width: Val::Percent(100.),
-            height: Val::Percent(100.),
-            padding: UiRect::all(Val::VMin(1.)),
-            ..default()
-        },
-        BorderRadius::all(Val::Percent(20.)),
-        BorderColor(Color::srgb(0.99, 0.69, 1.)),
-        BackgroundColor(Color::srgba(0.8, 0.43, 1., 0.5)),
-        ScriptChoices::new(script_runner),
-    )).id();
+        },))
+        .id();
+    let visible_choice_box = commands
+        .spawn((
+            Node {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Column,
+                border: UiRect::all(Val::VMin(0.75)),
+                width: Val::Percent(100.),
+                height: Val::Percent(100.),
+                padding: UiRect::all(Val::VMin(1.)),
+                ..default()
+            },
+            BorderRadius::all(Val::Percent(20.)),
+            BorderColor(Color::srgb(0.99, 0.69, 1.)),
+            BackgroundColor(Color::srgba(0.8, 0.43, 1., 0.5)),
+            ScriptChoices::new(script_runner),
+        ))
+        .id();
     commands.entity(root).add_child(choice_box_wrapper);
-    commands.entity(choice_box_wrapper).add_child(visible_choice_box);
+    commands
+        .entity(choice_box_wrapper)
+        .add_child(visible_choice_box);
 
     commands.insert_resource(AssetsToLoad(vec![
         me_image.id().untyped(),
@@ -275,21 +288,12 @@ fn update_chair_materials(
 }
 
 fn update_video_player(
-    video_player: Query<(&MeshMaterial3d<StandardMaterial>, &VideoPlayer)>,
+    video_players: Query<&VideoPlayer>,
     mut video_streams: ResMut<Assets<VideoStream>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     keyboard: Res<ButtonInput<KeyCode>>,
 ) {
-    for (video_material, video_player) in video_player.iter() {
-        if let (Some(material), Some(video_stream)) = (
-            materials.get_mut(video_material.id()),
-            video_streams.get_mut(video_player.0.id()),
-        ) {
-            material.base_color_texture = video_stream
-                .buffered_frames
-                .get(0)
-                .map(|frame| frame.image.clone());
-
+    for video_player in video_players.iter() {
+        if let Some(video_stream) = video_streams.get_mut(video_player.0.id()) {
             if keyboard.just_pressed(KeyCode::KeyV) {
                 video_stream.playing = !video_stream.playing;
                 println!("video playing = {}", video_stream.playing);
@@ -338,7 +342,8 @@ fn main() {
             MaterialPlugin::<ExtendedMaterial<StandardMaterial, Paper>>::default(),
             DebugPlugin,
             VideoPlugin,
-            ScriptPlugin
+            VideoPlayerPlugin::<MeshMaterial3d<StandardMaterial>>::default(),
+            ScriptPlugin,
         ))
         .add_systems(Startup, setup)
         .add_systems(

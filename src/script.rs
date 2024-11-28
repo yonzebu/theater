@@ -1,13 +1,15 @@
 use std::{borrow::Cow, error::Error, fmt::Display, time::Duration};
 
 use bevy::{
-    asset::{io::Reader, AssetLoader}, ecs::{component::{ComponentId, StorageType}, world::DeferredWorld}, prelude::*, scene::ron::de, time::Stopwatch
+    asset::{io::Reader, AssetLoader},
+    ecs::{component::ComponentId, world::DeferredWorld},
+    prelude::*,
 };
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_till, take_till1},
     character::complete::{line_ending, multispace0},
-    combinator::{eof, peek, rest, verify},
+    combinator::{eof, peek, verify},
     error::ParseError,
     multi::{fold_many0, many0},
     sequence::{delimited, preceded, terminated, tuple},
@@ -33,13 +35,13 @@ impl AnswerBlock {
     pub fn get_answer(&self, answer: usize) -> Option<&String> {
         match self {
             Self::Single(s) => (answer == 0).then(|| s),
-            Self::Many(choices) => choices.get(answer).map(|answer| &answer.answer)
+            Self::Many(choices) => choices.get(answer).map(|answer| &answer.answer),
         }
     }
     pub fn get_response(&self, answer: usize) -> Option<&String> {
         match self {
             Self::Single(s) => None,
-            Self::Many(choices) => choices.get(answer).map(|answer| &answer.response)
+            Self::Many(choices) => choices.get(answer).map(|answer| &answer.response),
         }
     }
 }
@@ -90,11 +92,16 @@ fn end<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
 }
 
 fn line<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
-    verify(terminated(till_newline1.map(str::trim), Parser::or(line_ending, eof)), |s: &str| s.len() > 0)(lines)
+    verify(
+        terminated(till_newline1.map(str::trim), Parser::or(line_ending, eof)),
+        |s: &str| s.len() > 0,
+    )(lines)
 }
 
 fn empty<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
-    verify(terminated(till_newline0, line_ending), |s: &str| s.trim().len() == 0)(lines)
+    verify(terminated(till_newline0, line_ending), |s: &str| {
+        s.trim().len() == 0
+    })(lines)
 }
 
 /// skips while the first parser has input. kinda like preceded but runs the first parser until it fails.
@@ -162,7 +169,7 @@ impl Script {
         raw: impl Into<Cow<'static, str>>,
     ) -> Result<Self, nom::Err<nom::error::Error<String>>> {
         let raw: Cow<'static, str> = raw.into();
-        let (extra_input, entries) = parse_entries(&raw).map_err(|e| e.map_input(|s| s.into()))?;
+        let (_extra_input, entries) = parse_entries(&raw).map_err(|e| e.map_input(|s| s.into()))?;
         Ok(Script { raw, entries })
     }
 
@@ -208,8 +215,8 @@ impl AssetLoader for ScriptLoader {
     async fn load(
         &self,
         reader: &mut dyn Reader,
-        settings: &Self::Settings,
-        load_context: &mut bevy::asset::LoadContext<'_>,
+        _settings: &Self::Settings,
+        _load_context: &mut bevy::asset::LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
         let mut buf = Vec::new();
         reader
@@ -239,10 +246,10 @@ pub enum UpdateRunner {
 #[derive(Event)]
 pub enum RunnerUpdated {
     Finished,
-    NoScript
+    NoScript,
 }
 
-// a nicer version of this would have runners/choices automatically add/remove each other with 
+// a nicer version of this would have runners/choices automatically add/remove each other with
 // component hooks but that's not insignificant effort and i need to get this done
 #[derive(Component)]
 #[require(Text)]
@@ -252,10 +259,10 @@ pub struct ScriptRunner {
     choices_display: Entity,
     /// index of the current ScriptEntry
     current_entry: usize,
-    /// if this is None, the text currently being displayed is either a single line (if 
-    /// `current_entry` refers to a `ScriptEntry::Line`) or a prompt (`current_entry` refers to a 
-    /// `ScriptEntry::Prompt`). if `current_entry` refers to a `Prompt` with 
-    /// `choices = AnswerBlock::Many(choice_vec)`, this is `Some(i)` where 
+    /// if this is None, the text currently being displayed is either a single line (if
+    /// `current_entry` refers to a `ScriptEntry::Line`) or a prompt (`current_entry` refers to a
+    /// `ScriptEntry::Prompt`). if `current_entry` refers to a `Prompt` with
+    /// `choices = AnswerBlock::Many(choice_vec)`, this is `Some(i)` where
     /// `choice_vec[i].response` is the text currently being displayed.
     current_answer: Option<usize>,
     /// number of bytes displayed so far
@@ -275,9 +282,12 @@ impl ScriptRunner {
             current_entry: 0,
             current_answer: None,
             displayed_bytes: 0,
-            display_timer: Timer::new(Duration::from_secs_f32(1. / text_speed), TimerMode::Repeating),
+            display_timer: Timer::new(
+                Duration::from_secs_f32(1. / text_speed),
+                TimerMode::Repeating,
+            ),
             display_ticks: 0,
-            last_displayed_tick: 0
+            last_displayed_tick: 0,
         }
     }
     pub fn pause(&mut self) {
@@ -307,7 +317,7 @@ impl ScriptRunner {
         mut commands: Commands,
         mut runners: Query<(&mut ScriptRunner, &mut Text)>,
         mut choices_containers: Query<&mut ScriptChoices>,
-        scripts: Res<Assets<Script>>
+        scripts: Res<Assets<Script>>,
     ) {
         let Ok((mut runner, mut text)) = runners.get_mut(trigger.entity()) else {
             return;
@@ -323,57 +333,86 @@ impl ScriptRunner {
             return;
         };
         match trigger.event() {
-            UpdateRunner::FinishLine => {
-                match (entry, runner.current_answer) {
-                    (ScriptEntry::Line(s), None) 
-                        | (ScriptEntry::Prompt { prompt: s, ..}, None) => {
-                        text.0.clone_from(s);
-                    }
-                    (ScriptEntry::Prompt { choices: AnswerBlock::Many(answers), .. }, Some(index)) => {
-                        let Some(answer) = answers.get(index) else { return; };
-                        text.0.clone_from(&answer.response);
-                    }
-                    _ => unreachable!()
+            UpdateRunner::FinishLine => match (entry, runner.current_answer) {
+                (ScriptEntry::Line(s), None) | (ScriptEntry::Prompt { prompt: s, .. }, None) => {
+                    text.0.clone_from(s);
                 }
-            }
-            UpdateRunner::NextLine => {
-                match (entry, runner.current_answer) {
-                    (ScriptEntry::Line(_), None) => {
-                        runner.current_entry += 1;
+                (
+                    ScriptEntry::Prompt {
+                        choices: AnswerBlock::Many(answers),
+                        ..
+                    },
+                    Some(index),
+                ) => {
+                    let Some(answer) = answers.get(index) else {
+                        return;
+                    };
+                    text.0.clone_from(&answer.response);
+                }
+                _ => unreachable!(),
+            },
+            UpdateRunner::NextLine => match (entry, runner.current_answer) {
+                (ScriptEntry::Line(_), None) => {
+                    runner.current_entry += 1;
+                    text.0.clear();
+                    runner.reset_display();
+                }
+                (ScriptEntry::Prompt { .. }, None) => {}
+                (
+                    ScriptEntry::Prompt {
+                        choices: AnswerBlock::Many(answers),
+                        ..
+                    },
+                    Some(current_answer),
+                ) => {
+                    if answers
+                        .get(current_answer)
+                        .map_or(false, |answer| answer.is_end)
+                    {
+                        runner.current_entry = usize::MAX;
+                        runner.current_answer = None;
                         text.0.clear();
                         runner.reset_display();
-                    }
-                    // FIXME: should this be counted as a choice, since there's only one? i think not
-                    (ScriptEntry::Prompt { .. }, None) => {}
-                    (ScriptEntry::Prompt { choices: AnswerBlock::Many(_), .. }, Some(_)) => {
+                        runner_commands.trigger(RunnerUpdated::Finished);
+                    } else {
                         runner.current_entry += 1;
                         runner.current_answer = None;
                         text.0.clear();
                         runner.reset_display();
                     }
-                    _ => unreachable!()
                 }
-            }
-            &UpdateRunner::ChooseAnswer(index) => {
-                match (entry, runner.current_answer) {
-                    (_, Some(_)) | (ScriptEntry::Line(_), _) => {}
-                    (ScriptEntry::Prompt { choices: AnswerBlock::Single(_), .. }, None) => {
-                        if index == 0 {
-                            runner.current_entry += 1;
-                            text.0.clear();
-                            runner.reset_display();
-                        }
-                    }
-                    (ScriptEntry::Prompt { choices: AnswerBlock::Many(answers), .. }, None) => {
-                        if index >= answers.len() {
-                            return;
-                        };
-                        runner.current_answer = Some(index);
+                _ => unreachable!(),
+            },
+            &UpdateRunner::ChooseAnswer(index) => match (entry, runner.current_answer) {
+                (_, Some(_)) | (ScriptEntry::Line(_), _) => {}
+                (
+                    ScriptEntry::Prompt {
+                        choices: AnswerBlock::Single(_),
+                        ..
+                    },
+                    None,
+                ) => {
+                    if index == 0 {
+                        runner.current_entry += 1;
                         text.0.clear();
                         runner.reset_display();
                     }
                 }
-            }
+                (
+                    ScriptEntry::Prompt {
+                        choices: AnswerBlock::Many(answers),
+                        ..
+                    },
+                    None,
+                ) => {
+                    if index >= answers.len() {
+                        return;
+                    };
+                    runner.current_answer = Some(index);
+                    text.0.clear();
+                    runner.reset_display();
+                }
+            },
         }
     }
 }
@@ -394,9 +433,7 @@ impl ScriptChoices {
         }
     }
 
-    fn show_choices_systems() {
-
-    }
+    fn show_choices_systems() {}
 }
 
 #[derive(Component)]
@@ -408,11 +445,14 @@ fn update_script_runner_text(
     mut runners: Query<(&mut ScriptRunner, &mut Text)>,
     mut choice_displays: Query<(&ScriptChoice, &Node, &Children)>,
     scripts: Res<Assets<Script>>,
-    time: Res<Time>
+    time: Res<Time>,
 ) {
     for (mut runner, mut text) in runners.iter_mut() {
         let runner = &mut *runner;
-        runner.display_ticks += runner.display_timer.tick(time.delta()).times_finished_this_tick();
+        runner.display_ticks += runner
+            .display_timer
+            .tick(time.delta())
+            .times_finished_this_tick();
 
         let Some(script) = scripts.get(runner.script.id()) else {
             continue;
@@ -426,12 +466,10 @@ fn update_script_runner_text(
             text.0.extend(
                 s[runner.displayed_bytes..]
                     .chars()
-                    .map(|c| {
-                        match c {
-                            '.' | '?' | '-' | '!' => (c, 6),
-                            ',' => (c, 3),
-                            _ => (c, 1)
-                        }
+                    .map(|c| match c {
+                        '.' | '?' | '-' | '!' => (c, 6),
+                        ',' => (c, 3),
+                        _ => (c, 1),
                     })
                     .take_while(|(_, ticks)| {
                         if runner.last_displayed_tick < runner.display_ticks {
@@ -441,10 +479,10 @@ fn update_script_runner_text(
                             false
                         }
                     })
-                    .map(|(c, _)| {                        
+                    .map(|(c, _)| {
                         new_bytes += c.len_utf8();
                         c
-                    })
+                    }),
             );
             runner.displayed_bytes += new_bytes;
         };
@@ -458,11 +496,17 @@ fn update_script_runner_text(
                 extend_text(prompt);
                 text_len = prompt.as_bytes().len();
             }
-            (ScriptEntry::Prompt { choices: AnswerBlock::Many(answers), .. }, Some(answer_index)) => {
+            (
+                ScriptEntry::Prompt {
+                    choices: AnswerBlock::Many(answers),
+                    ..
+                },
+                Some(answer_index),
+            ) => {
                 extend_text(&answers[answer_index].response);
                 text_len = answers[answer_index].response.as_bytes().len();
             }
-            _ => unreachable!()
+            _ => unreachable!(),
         }
         if runner.displayed_bytes >= text_len {
             // finished displaying?
@@ -486,58 +530,58 @@ mod tests {
 
     #[test]
     fn empty_script_parses() {
-        let empties = &[
-            "",
-            "   ",
-            "\t ",
-        ];
+        let empties = &["", "   ", "\t "];
         for &empty in empties {
             assert_eq!(
-                Script::from_raw(empty), 
-                Ok(Script { raw: Cow::Borrowed(empty), entries: vec![] })
+                Script::from_raw(empty),
+                Ok(Script {
+                    raw: Cow::Borrowed(empty),
+                    entries: vec![]
+                })
             );
         }
     }
 
     #[test]
     fn single_line_parses() {
-        let lines = &[
-            "test",
-            " test",
-            "test ",
-            "test\n",
-            " test \r\n"
-        ];
+        let lines = &["test", " test", "test ", "test\n", " test \r\n"];
         for &line in lines {
             assert_eq!(
-                Script::from_raw(line), 
-                Ok(Script { 
-                    raw: Cow::Borrowed(line), 
-                    entries: vec![ScriptEntry::Line(line.trim().into())] 
+                Script::from_raw(line),
+                Ok(Script {
+                    raw: Cow::Borrowed(line),
+                    entries: vec![ScriptEntry::Line(line.trim().into())]
                 })
             );
         }
-        
     }
 
     #[test]
     fn prompt_block_parses() {
         let single_answer = ">prompt\r\n\n\n-   answer\n>next prompt\n-next 1\nnext response 1\n-next 2\nnext response 2";
         assert_eq!(
-            Script::from_raw(single_answer), 
-            Ok(Script { 
-                raw: single_answer.into(), 
+            Script::from_raw(single_answer),
+            Ok(Script {
+                raw: single_answer.into(),
                 entries: vec![
                     ScriptEntry::Prompt {
                         prompt: "prompt".into(),
                         choices: AnswerBlock::Single("answer".into())
                     },
-                    ScriptEntry::Prompt { 
-                        prompt: "next prompt".into(), 
+                    ScriptEntry::Prompt {
+                        prompt: "next prompt".into(),
                         choices: AnswerBlock::Many(vec![
-                            Answer { answer: "next 1".into(), response: "next response 1".into(), is_end: false },
-                            Answer { answer: "next 2".into(), response: "next response 2".into(), is_end: false },
-                        ]) 
+                            Answer {
+                                answer: "next 1".into(),
+                                response: "next response 1".into(),
+                                is_end: false
+                            },
+                            Answer {
+                                answer: "next 2".into(),
+                                response: "next response 2".into(),
+                                is_end: false
+                            },
+                        ])
                     }
                 ]
             })
@@ -545,16 +589,28 @@ mod tests {
 
         let multi_answer = ">prompt\n\n\r\n- answer1  \r\n response1\t\n-answer2\r\nresponse2\n-end answer\n\r\n!end response";
         assert_eq!(
-            Script::from_raw(multi_answer), 
-            Ok(Script { 
-                raw: multi_answer.into(), 
-                entries: vec![ScriptEntry::Prompt { 
-                    prompt: "prompt".into(), 
+            Script::from_raw(multi_answer),
+            Ok(Script {
+                raw: multi_answer.into(),
+                entries: vec![ScriptEntry::Prompt {
+                    prompt: "prompt".into(),
                     choices: AnswerBlock::Many(vec![
-                        Answer { answer: "answer1".into(), response: "response1".into(), is_end: false },
-                        Answer { answer: "answer2".into(), response: "response2".into(), is_end: false },
-                        Answer { answer: "end answer".into(), response: "end response".into(), is_end: true },
-                    ]) 
+                        Answer {
+                            answer: "answer1".into(),
+                            response: "response1".into(),
+                            is_end: false
+                        },
+                        Answer {
+                            answer: "answer2".into(),
+                            response: "response2".into(),
+                            is_end: false
+                        },
+                        Answer {
+                            answer: "end answer".into(),
+                            response: "end response".into(),
+                            is_end: true
+                        },
+                    ])
                 }]
             })
         );
@@ -569,12 +625,12 @@ mod tests {
                 raw: to_parse.into(),
                 entries: vec![
                     ScriptEntry::Line("line 1".into()),
-                    ScriptEntry::Prompt { 
-                        prompt: "prompt".into(), 
-                        choices: AnswerBlock::Many(vec![Answer { 
-                            answer: "answer".into(), 
-                            response: "response".into(), 
-                            is_end: false 
+                    ScriptEntry::Prompt {
+                        prompt: "prompt".into(),
+                        choices: AnswerBlock::Many(vec![Answer {
+                            answer: "answer".into(),
+                            response: "response".into(),
+                            is_end: false
                         }])
                     },
                     ScriptEntry::Line("line 2".into()),

@@ -1,5 +1,6 @@
 use std::{
     collections::VecDeque,
+    marker::PhantomData,
     path::{Path, PathBuf},
     sync::{
         mpsc::{channel, Receiver, Sender},
@@ -9,6 +10,7 @@ use std::{
 
 use bevy::{
     asset::{AssetLoader, RenderAssetUsages},
+    ecs::system::{lifetimeless::SResMut, StaticSystemParam, SystemParam},
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
     tasks::AsyncComputeTaskPool,
@@ -286,5 +288,70 @@ impl Plugin for VideoPlugin {
         app.init_asset::<VideoStream>()
             .init_asset_loader::<VideoStreamLoader>()
             .add_systems(PostUpdate, update_videos);
+    }
+}
+
+#[derive(Component)]
+#[component(storage = "SparseSet")]
+pub struct VideoPlayer(pub Handle<VideoStream>);
+
+pub trait VideoReceiver {
+    type SystemParam: SystemParam + 'static;
+    fn receive_frame(
+        &mut self,
+        frame: Handle<Image>,
+        param: &mut <Self::SystemParam as SystemParam>::Item<'_, '_>,
+    );
+}
+impl VideoReceiver for StandardMaterial {
+    type SystemParam = ();
+    #[inline]
+    fn receive_frame(
+        &mut self,
+        frame: Handle<Image>,
+        _: &mut <Self::SystemParam as SystemParam>::Item<'_, '_>,
+    ) {
+        self.base_color_texture = Some(frame)
+    }
+}
+impl<M: Material + VideoReceiver> VideoReceiver for MeshMaterial3d<M> {
+    type SystemParam = (SResMut<Assets<M>>, M::SystemParam);
+    #[inline]
+    fn receive_frame(
+        &mut self,
+        frame: Handle<Image>,
+        (materials, material_param): &mut <Self::SystemParam as SystemParam>::Item<'_, '_>,
+    ) {
+        if let Some(material) = materials.get_mut(self.0.id()) {
+            material.receive_frame(frame, material_param);
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct VideoPlayerPlugin<R: VideoReceiver>(PhantomData<R>);
+
+impl<R: VideoReceiver + Component> Plugin for VideoPlayerPlugin<R> {
+    fn build(&self, app: &mut App) {
+        app.add_systems(PostUpdate, update_receivers_from_players::<R>);
+    }
+}
+
+fn update_receivers_from_players<R: VideoReceiver + Component>(
+    mut video_players: Query<(&mut R, &VideoPlayer)>,
+    mut video_streams: ResMut<Assets<VideoStream>>,
+    mut param: StaticSystemParam<R::SystemParam>,
+) {
+    let mut param = param.into_inner();
+    for (mut receiver, player) in video_players.iter_mut() {
+        if let Some(video_stream) = video_streams.get_mut(player.0.id()) {
+            if let Some(frame) = video_stream
+                .buffered_frames
+                .get(0)
+                .map(|frame| frame.image.clone())
+            {
+                receiver.receive_frame(frame, &mut param);
+            }
+        }
     }
 }
