@@ -1,7 +1,7 @@
 use std::{borrow::Cow, error::Error, fmt::Display, time::Duration};
 
 use bevy::{
-    asset::{io::Reader, AssetLoader}, ecs::component::StorageType, prelude::*, scene::ron::de, time::Stopwatch
+    asset::{io::Reader, AssetLoader}, ecs::{component::{ComponentId, StorageType}, world::DeferredWorld}, prelude::*, scene::ron::de, time::Stopwatch
 };
 use nom::{
     branch::alt,
@@ -23,21 +23,23 @@ pub struct Answer {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnswerBlock {
+    /// a single answer, so only the one string is provided
     Single(String),
-    Multi(Vec<Answer>),
+    /// multiple answers, each with a response
+    Many(Vec<Answer>),
 }
 
 impl AnswerBlock {
     pub fn get_answer(&self, answer: usize) -> Option<&String> {
         match self {
             Self::Single(s) => (answer == 0).then(|| s),
-            Self::Multi(choices) => choices.get(answer).map(|answer| &answer.answer)
+            Self::Many(choices) => choices.get(answer).map(|answer| &answer.answer)
         }
     }
     pub fn get_response(&self, answer: usize) -> Option<&String> {
         match self {
             Self::Single(s) => None,
-            Self::Multi(choices) => choices.get(answer).map(|answer| &answer.response)
+            Self::Many(choices) => choices.get(answer).map(|answer| &answer.response)
         }
     }
 }
@@ -129,7 +131,7 @@ fn prompt_block<'a>(lines: &'a str) -> IResult<&'a str, ScriptEntry> {
                     },
                 ),
             )))
-            .map(AnswerBlock::Multi),
+            .map(AnswerBlock::Many),
         )),
     )))(lines)?;
     Ok((
@@ -222,15 +224,29 @@ impl AssetLoader for ScriptLoader {
     }
 }
 
+/// triggered on a [`ScriptRunner`] to update its state in some way
+#[derive(Event)]
 pub enum UpdateRunner {
+    /// immediately finish displaying the current text
+    FinishLine,
+    /// immediately progress to the next line (ignored if currently choosing an answer)
     NextLine,
+    /// if the index is invalid or the runner isn't currently choosing an answer this is ignored
+    ChooseAnswer(usize),
+}
 
+/// triggered on a [`ScriptRunner`] to indicate certain state changes
+#[derive(Event)]
+pub enum RunnerUpdated {
+    Finished,
+    NoScript
 }
 
 // a nicer version of this would have runners/choices automatically add/remove each other with 
 // component hooks but that's not insignificant effort and i need to get this done
 #[derive(Component)]
 #[require(Text)]
+#[component(on_add = ScriptRunner::on_add)]
 pub struct ScriptRunner {
     script: Handle<Script>,
     choices_display: Entity,
@@ -239,7 +255,7 @@ pub struct ScriptRunner {
     /// if this is None, the text currently being displayed is either a single line (if 
     /// `current_entry` refers to a `ScriptEntry::Line`) or a prompt (`current_entry` refers to a 
     /// `ScriptEntry::Prompt`). if `current_entry` refers to a `Prompt` with 
-    /// `choices = AnswerBlock::Multi(choice_vec)`, this is `Some(i)` where 
+    /// `choices = AnswerBlock::Many(choice_vec)`, this is `Some(i)` where 
     /// `choice_vec[i].response` is the text currently being displayed.
     current_answer: Option<usize>,
     /// number of bytes displayed so far
@@ -272,6 +288,93 @@ impl ScriptRunner {
     }
     pub fn paused(&self) -> bool {
         self.display_timer.paused()
+    }
+    fn reset_display(&mut self) {
+        self.display_timer.reset();
+        self.displayed_bytes = 0;
+        self.display_ticks = 0;
+        self.last_displayed_tick = 0;
+    }
+
+    fn on_add(mut deferred_world: DeferredWorld, entity: Entity, _: ComponentId) {
+        deferred_world
+            .commands()
+            .entity(entity)
+            .observe(ScriptRunner::on_update_runner_trigger);
+    }
+    fn on_update_runner_trigger(
+        trigger: Trigger<UpdateRunner>,
+        mut commands: Commands,
+        mut runners: Query<(&mut ScriptRunner, &mut Text)>,
+        mut choices_containers: Query<&mut ScriptChoices>,
+        scripts: Res<Assets<Script>>
+    ) {
+        let Ok((mut runner, mut text)) = runners.get_mut(trigger.entity()) else {
+            return;
+        };
+        let runner = &mut *runner;
+        let mut runner_commands = commands.entity(trigger.entity());
+        let Some(script) = scripts.get(runner.script.id()) else {
+            runner_commands.trigger(RunnerUpdated::NoScript);
+            return;
+        };
+        let Some(entry) = script.get_entry(runner.current_entry) else {
+            runner_commands.trigger(RunnerUpdated::Finished);
+            return;
+        };
+        match trigger.event() {
+            UpdateRunner::FinishLine => {
+                match (entry, runner.current_answer) {
+                    (ScriptEntry::Line(s), None) 
+                        | (ScriptEntry::Prompt { prompt: s, ..}, None) => {
+                        text.0.clone_from(s);
+                    }
+                    (ScriptEntry::Prompt { choices: AnswerBlock::Many(answers), .. }, Some(index)) => {
+                        let Some(answer) = answers.get(index) else { return; };
+                        text.0.clone_from(&answer.response);
+                    }
+                    _ => unreachable!()
+                }
+            }
+            UpdateRunner::NextLine => {
+                match (entry, runner.current_answer) {
+                    (ScriptEntry::Line(_), None) => {
+                        runner.current_entry += 1;
+                        text.0.clear();
+                        runner.reset_display();
+                    }
+                    // FIXME: should this be counted as a choice, since there's only one? i think not
+                    (ScriptEntry::Prompt { .. }, None) => {}
+                    (ScriptEntry::Prompt { choices: AnswerBlock::Many(_), .. }, Some(_)) => {
+                        runner.current_entry += 1;
+                        runner.current_answer = None;
+                        text.0.clear();
+                        runner.reset_display();
+                    }
+                    _ => unreachable!()
+                }
+            }
+            &UpdateRunner::ChooseAnswer(index) => {
+                match (entry, runner.current_answer) {
+                    (_, Some(_)) | (ScriptEntry::Line(_), _) => {}
+                    (ScriptEntry::Prompt { choices: AnswerBlock::Single(_), .. }, None) => {
+                        if index == 0 {
+                            runner.current_entry += 1;
+                            text.0.clear();
+                            runner.reset_display();
+                        }
+                    }
+                    (ScriptEntry::Prompt { choices: AnswerBlock::Many(answers), .. }, None) => {
+                        if index >= answers.len() {
+                            return;
+                        };
+                        runner.current_answer = Some(index);
+                        text.0.clear();
+                        runner.reset_display();
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -355,7 +458,7 @@ fn update_script_runner_text(
                 extend_text(prompt);
                 text_len = prompt.as_bytes().len();
             }
-            (ScriptEntry::Prompt { choices: AnswerBlock::Multi(answers), .. }, Some(answer_index)) => {
+            (ScriptEntry::Prompt { choices: AnswerBlock::Many(answers), .. }, Some(answer_index)) => {
                 extend_text(&answers[answer_index].response);
                 text_len = answers[answer_index].response.as_bytes().len();
             }
@@ -431,7 +534,7 @@ mod tests {
                     },
                     ScriptEntry::Prompt { 
                         prompt: "next prompt".into(), 
-                        choices: AnswerBlock::Multi(vec![
+                        choices: AnswerBlock::Many(vec![
                             Answer { answer: "next 1".into(), response: "next response 1".into(), is_end: false },
                             Answer { answer: "next 2".into(), response: "next response 2".into(), is_end: false },
                         ]) 
@@ -447,7 +550,7 @@ mod tests {
                 raw: multi_answer.into(), 
                 entries: vec![ScriptEntry::Prompt { 
                     prompt: "prompt".into(), 
-                    choices: AnswerBlock::Multi(vec![
+                    choices: AnswerBlock::Many(vec![
                         Answer { answer: "answer1".into(), response: "response1".into(), is_end: false },
                         Answer { answer: "answer2".into(), response: "response2".into(), is_end: false },
                         Answer { answer: "end answer".into(), response: "end response".into(), is_end: true },
@@ -468,7 +571,7 @@ mod tests {
                     ScriptEntry::Line("line 1".into()),
                     ScriptEntry::Prompt { 
                         prompt: "prompt".into(), 
-                        choices: AnswerBlock::Multi(vec![Answer { 
+                        choices: AnswerBlock::Many(vec![Answer { 
                             answer: "answer".into(), 
                             response: "response".into(), 
                             is_end: false 
