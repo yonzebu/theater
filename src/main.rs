@@ -1,16 +1,18 @@
 use bevy::asset::UntypedAssetId;
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::world::DeferredWorld;
-use bevy::pbr::{ExtendedMaterial, MaterialExtension};
-use bevy::render::render_resource::{AsBindGroup, ShaderRef};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension, NotShadowCaster};
+use bevy::render::render_resource::{AsBindGroup, Face, ShaderRef};
 use bevy::{math::vec3, prelude::*};
 
 mod debug;
 use debug::*;
+use screen_light::{ScreenLight, ScreenLightExtension, ScreenLightExtensionPlugin, ScreenLightPlugin};
 use script::{ScriptChoices, ScriptPlugin, ScriptRunner};
 use video::{VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream};
 mod script;
 mod video;
+mod screen_light;
 
 #[derive(Clone, Asset, TypePath, AsBindGroup)]
 struct Paper {}
@@ -28,9 +30,17 @@ impl MaterialExtension for Paper {
 #[component(storage = "SparseSet")]
 struct Chair;
 
+#[derive(Component)]
+#[component(storage = "SparseSet")]
+struct Screen;
+
 const CHAIR_ROWS: i32 = 5;
 const CHAIR_COLS: i32 = 5;
 const CHAIR_COUNT: i32 = 25;
+const SCREEN_POS: f32 = -9.9;
+const SCREEN_WIDTH: f32 = 18.;
+const SCREEN_HEIGHT: f32 = SCREEN_WIDTH * 9. / 16.;
+const SCREEN_LIGHT_POS: f32 = SCREEN_POS - 10. / 4.;
 
 #[derive(Resource)]
 struct AssetsToLoad(Vec<UntypedAssetId>);
@@ -67,10 +77,26 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut papers: ResMut<Assets<ExtendedMaterial<StandardMaterial, Paper>>>,
+    mut images: ResMut<Assets<Image>>,
     assets: Res<AssetServer>,
 ) {
     commands.spawn((Camera3d::default(), Transform::from_xyz(0., 2., 5.)));
-    commands.spawn((PointLight::default(), Transform::from_xyz(0., 2., -9.)));
+    // commands.spawn((PointLight::default(), Transform::from_xyz(0., 2., -9.)));
+    let video_stream = assets.load::<VideoStream>("nonfinal/show.mp4");
+    commands.spawn((
+        // keep transform synced with screen transform
+        Transform::from_xyz(0., 2.5, SCREEN_LIGHT_POS).looking_to(Dir3::Z, Dir3::Y),
+        ScreenLight {
+            image: Handle::default(),
+        },
+        VideoPlayer(video_stream.clone()),
+        Projection::Perspective(PerspectiveProjection {
+            fov: 2. * f32::atan(SCREEN_HEIGHT / 2. / (SCREEN_POS - SCREEN_LIGHT_POS)),
+            aspect_ratio: 16. / 9.,
+            near: SCREEN_POS - SCREEN_LIGHT_POS,
+            ..default()
+        }),
+    ));
 
     let rectangle = meshes.add(Rectangle::new(1.0, 1.0));
     let black = materials.add(Color::linear_rgb(0., 0., 0.));
@@ -78,17 +104,18 @@ fn setup(
     commands.spawn((
         Mesh3d(rectangle.clone()),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::linear_rgb(0.5, 0.5, 0.5),
             unlit: true,
             ..default()
         })),
         Transform {
-            translation: vec3(0., 2.5, -9.9),
-            scale: vec3(18., 18. * 9. / 16., 1.),
+            translation: vec3(0., 2.5, SCREEN_POS),
+            scale: vec3(SCREEN_WIDTH, SCREEN_HEIGHT, 1.),
             ..default()
         },
-        VideoPlayer(assets.load::<VideoStream>("nonfinal/showtiny.mp4")),
+        VideoPlayer(video_stream.clone()),
         WaitingForLoads,
+        NotShadowCaster,
+        Screen,
     ));
     // screen border
     commands.spawn((
@@ -100,6 +127,7 @@ fn setup(
             ..default()
         },
         WaitingForLoads,
+        NotShadowCaster,
     ));
     // screen wall
     commands.spawn((
@@ -111,16 +139,20 @@ fn setup(
             ..default()
         },
         WaitingForLoads,
+        NotShadowCaster,
     ));
 
     // other walls
-    let mut cube_mesh = Cuboid::from_size(vec3(20., 20., 15.)).mesh().build();
-    cube_mesh.invert_winding().unwrap();
     commands.spawn((
-        Mesh3d(meshes.add(cube_mesh)),
-        MeshMaterial3d(materials.add(Color::linear_rgb(0.5, 0.125, 0.125))),
+        Mesh3d(meshes.add(Cuboid::from_size(vec3(20., 20., 15.)).mesh().build())),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::linear_rgb(0.5, 0.125, 0.125),
+            cull_mode: Some(Face::Front),
+            ..default()
+        })),
         Transform::from_xyz(0., 0., -5.),
         WaitingForLoads,
+        NotShadowCaster,
     ));
 
     let me_image = assets.load("nonfinal/maybem.png");
@@ -158,9 +190,6 @@ fn setup(
             let y = -j as f32 * 0.75;
             let z = -j as f32 * 2.;
             commands.spawn((
-                // Mesh3d(meshes.add(Cuboid::default())),
-                // Mesh3d(chair.clone()),
-                // MeshMaterial3d(chair_material.clone()),
                 SceneRoot(chair.clone()),
                 Transform {
                     translation: vec3(x, y, z),
@@ -271,30 +300,46 @@ fn setup(
     ]));
 }
 
-// TODO: use material extension with screen reflections
 fn update_chair_materials(
     mut commands: Commands,
     roots: Query<Entity, With<Chair>>,
     with_children: Query<&Children>,
-    not_updateds: Query<(Entity, &MeshMaterial3d<StandardMaterial>)>,
+    not_updateds: Query<(Entity, &MeshMaterial3d<StandardMaterial>), Without<MeshMaterial3d<ExtendedMaterial<StandardMaterial, ScreenLightExtension>>>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut extended_materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, ScreenLightExtension>>>,
+    screen_light: Query<Entity, With<ScreenLight>>,
 ) {
+    let Ok(screen_light) = screen_light.get_single() else {
+        return;
+    };
     for root in roots.iter() {
         for descendant in with_children.iter_descendants(root) {
-            let Ok((entity, old_material)) = not_updateds.get(descendant) else {
+            let Ok((entity, old_material_handle)) = not_updateds.get(descendant) else {
                 continue;
             };
+            let Some(old_material) = materials.get_mut(old_material_handle.id()) else {
+                continue;
+            };
+            commands.entity(entity).insert(MeshMaterial3d(extended_materials.add(ExtendedMaterial {
+                base: old_material.clone(),
+                extension: ScreenLightExtension {
+                    light: screen_light,
+                }
+            })));
+            old_material.base_color = Color::NONE;
+            old_material.alpha_mode = AlphaMode::Mask(1.0);
         }
     }
 }
 
 fn update_video_player(
-    video_players: Query<&VideoPlayer>,
+    screens: Query<&VideoPlayer, With<Screen>>,
     mut video_streams: ResMut<Assets<VideoStream>>,
     keyboard: Res<ButtonInput<KeyCode>>,
 ) {
-    for video_player in video_players.iter() {
-        if let Some(video_stream) = video_streams.get_mut(video_player.0.id()) {
-            if keyboard.just_pressed(KeyCode::KeyV) {
+    for video_player in screens.iter() {
+        if keyboard.just_pressed(KeyCode::KeyV) {
+            if let Some(video_stream) = video_streams.get_mut(video_player.0.id()) {
                 video_stream.playing = !video_stream.playing;
                 println!("video playing = {}", video_stream.playing);
             }
@@ -340,10 +385,14 @@ fn main() {
         .add_plugins((
             DefaultPlugins,
             MaterialPlugin::<ExtendedMaterial<StandardMaterial, Paper>>::default(),
+            MaterialPlugin::<ExtendedMaterial<StandardMaterial, ScreenLightExtension>>::default(),
             DebugPlugin,
             VideoPlugin,
             VideoPlayerPlugin::<MeshMaterial3d<StandardMaterial>>::default(),
+            VideoPlayerPlugin::<ScreenLight>::default(),
             ScriptPlugin,
+            ScreenLightPlugin,
+            ScreenLightExtensionPlugin::<StandardMaterial>::default(),
         ))
         .add_systems(Startup, setup)
         .add_systems(

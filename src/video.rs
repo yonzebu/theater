@@ -9,11 +9,7 @@ use std::{
 };
 
 use bevy::{
-    asset::{AssetLoader, RenderAssetUsages},
-    ecs::system::{lifetimeless::SResMut, StaticSystemParam, SystemParam},
-    prelude::*,
-    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
-    tasks::AsyncComputeTaskPool,
+    asset::{AssetLoader, RenderAssetUsages}, ecs::system::{lifetimeless::SResMut, StaticSystemParam, SystemParam}, pbr::{ExtendedMaterial, MaterialExtension}, prelude::*, render::render_resource::{Extent3d, TextureDimension, TextureFormat}, tasks::AsyncComputeTaskPool
 };
 use ffmpeg_next::{
     self as ffmpeg, codec, decoder,
@@ -87,7 +83,7 @@ impl VideoDecoder {
                 }
             }
             if should_send_packet {
-                self.decoder.send_packet(&packet).unwrap();
+                let _ = self.decoder.send_packet(&packet);
             }
 
             let mut decoded;
@@ -100,14 +96,13 @@ impl VideoDecoder {
                         scaled = frame::Video::empty();
                         self.scaler.0.run(&decoded, &mut scaled).unwrap();
 
-                        self.send_frames
+                        let _ = self.send_frames
                             .send(DecodedFrame {
                                 width: scaled.width(),
                                 height: scaled.height(),
                                 data: scaled.data(0).to_owned(),
                                 pts: decoded.pts().unwrap(),
-                            })
-                            .unwrap();
+                            });
                     }
                     Err(ffmpeg::Error::Other { errno: EAGAIN }) => break,
                     Err(e) => panic!("receive frame error: {e:?}"),
@@ -120,7 +115,7 @@ impl VideoDecoder {
 
     fn finish_task(self) {
         let send_self = self.send_self.clone();
-        send_self.send(self).unwrap();
+        let _ = send_self.send(self);
     }
 }
 
@@ -280,6 +275,12 @@ impl AssetLoader for VideoStreamLoader {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SystemSet)]
+pub enum VideoSet {
+    UpdateStreams,
+    UpdatePlayers
+}
+
 pub struct VideoPlugin;
 
 impl Plugin for VideoPlugin {
@@ -287,7 +288,8 @@ impl Plugin for VideoPlugin {
         ffmpeg::init().unwrap();
         app.init_asset::<VideoStream>()
             .init_asset_loader::<VideoStreamLoader>()
-            .add_systems(PostUpdate, update_videos);
+            .add_systems(PostUpdate, update_videos.in_set(VideoSet::UpdateStreams))
+            .configure_sets(PostUpdate, VideoSet::UpdateStreams.before(VideoSet::UpdatePlayers));
     }
 }
 
@@ -295,16 +297,25 @@ impl Plugin for VideoPlugin {
 #[component(storage = "SparseSet")]
 pub struct VideoPlayer(pub Handle<VideoStream>);
 
-pub trait VideoReceiver {
+pub trait ReceiveFrame {
     type SystemParam: SystemParam + 'static;
+    #[inline]
+    fn should_receive(&self, id: impl Into<AssetId<Image>>) -> bool {
+        let _ = id;
+        true
+    }
     fn receive_frame(
         &mut self,
         frame: Handle<Image>,
         param: &mut <Self::SystemParam as SystemParam>::Item<'_, '_>,
     );
 }
-impl VideoReceiver for StandardMaterial {
+impl ReceiveFrame for StandardMaterial {
     type SystemParam = ();
+    #[inline]
+    fn should_receive(&self, id: impl Into<AssetId<Image>>) -> bool {
+        self.base_color_texture.as_ref().map_or(true, |h| h.id() != id.into())
+    }
     #[inline]
     fn receive_frame(
         &mut self,
@@ -314,7 +325,7 @@ impl VideoReceiver for StandardMaterial {
         self.base_color_texture = Some(frame)
     }
 }
-impl<M: Material + VideoReceiver> VideoReceiver for MeshMaterial3d<M> {
+impl<M: Material + ReceiveFrame> ReceiveFrame for MeshMaterial3d<M> {
     type SystemParam = (SResMut<Assets<M>>, M::SystemParam);
     #[inline]
     fn receive_frame(
@@ -322,25 +333,33 @@ impl<M: Material + VideoReceiver> VideoReceiver for MeshMaterial3d<M> {
         frame: Handle<Image>,
         (materials, material_param): &mut <Self::SystemParam as SystemParam>::Item<'_, '_>,
     ) {
-        if let Some(material) = materials.get_mut(self.0.id()) {
-            material.receive_frame(frame, material_param);
+        if let Some(material) = materials.get(self.0.id()) {
+            if material.should_receive(frame.id()) {
+                let material = materials.get_mut(self.0.id()).unwrap();
+                material.receive_frame(frame, material_param);
+            }
         }
     }
 }
 
-#[derive(Default)]
-pub struct VideoPlayerPlugin<R: VideoReceiver>(PhantomData<R>);
+pub struct VideoPlayerPlugin<R: ReceiveFrame>(PhantomData<R>);
 
-impl<R: VideoReceiver + Component> Plugin for VideoPlayerPlugin<R> {
-    fn build(&self, app: &mut App) {
-        app.add_systems(PostUpdate, update_receivers_from_players::<R>);
+impl<R: ReceiveFrame> Default for VideoPlayerPlugin<R> {
+    fn default() -> Self {
+        VideoPlayerPlugin(PhantomData)
     }
 }
 
-fn update_receivers_from_players<R: VideoReceiver + Component>(
+impl<R: ReceiveFrame + Component> Plugin for VideoPlayerPlugin<R> {
+    fn build(&self, app: &mut App) {
+        app.add_systems(PostUpdate, update_receivers_from_players::<R>.in_set(VideoSet::UpdatePlayers));
+    }
+}
+
+fn update_receivers_from_players<R: ReceiveFrame + Component>(
     mut video_players: Query<(&mut R, &VideoPlayer)>,
     mut video_streams: ResMut<Assets<VideoStream>>,
-    mut param: StaticSystemParam<R::SystemParam>,
+    param: StaticSystemParam<R::SystemParam>,
 ) {
     let mut param = param.into_inner();
     for (mut receiver, player) in video_players.iter_mut() {
@@ -350,7 +369,9 @@ fn update_receivers_from_players<R: VideoReceiver + Component>(
                 .get(0)
                 .map(|frame| frame.image.clone())
             {
-                receiver.receive_frame(frame, &mut param);
+                if receiver.should_receive(frame.id()) {
+                    receiver.receive_frame(frame, &mut param);
+                }
             }
         }
     }
