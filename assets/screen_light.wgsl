@@ -68,44 +68,25 @@ fn fragment(
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
 
-//     // generate a PbrInput struct from the StandardMaterial bindings
-//     var pbr_input = pbr_input_from_standard_material(in, is_front);
+    // generate a PbrInput struct from the StandardMaterial bindings
+    var pbr_input = pbr_input_from_standard_material(in, is_front);
 
-//     let nearest_grid_corner = floor(no_scribble_pos / GRID_SPACING) * GRID_SPACING;
-//     let to_corner = nearest_grid_corner - no_scribble_pos;
-//     var gridness: f32;
-//     if abs(to_corner.x) < abs(to_corner.y) {
-//         gridness = smoothstep(GRID_END_DIST, GRID_START_DIST, abs(to_corner.x));
-//     } else {
-//         gridness = smoothstep(GRID_END_DIST, GRID_START_DIST, abs(to_corner.y));
-//     }
+    // alpha discard
+    pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
 
-//     let paper_color = mix(PAPER_COLOR, GRID_COLOR, gridness);
-//     let alpha = pbr_input.material.base_color.a;
-//     let sampled_color = pbr_input.material.base_color.rgb;
-//     pbr_input.material.base_color = vec4(mix(paper_color, sampled_color, alpha), 1.0);
-
-//     // alpha discard
-//     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
-
-// #ifdef PREPASS_PIPELINE
-//     let out = deferred_output(in, pbr_input);
-// #else
-//     var out: FragmentOutput;
-//     // apply lighting
-//     out.color = apply_pbr_lighting(pbr_input);
-
-//     // apply in-shader post processing (fog, alpha-premultiply, and also tonemapping, debanding if the camera is non-hdr)
-//     // note this does not include fullscreen postprocessing effects like bloom.
-//     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
-
-// #endif
-
+#ifdef PREPASS_PIPELINE
+    let out = deferred_output(in, pbr_input);
+#else
     var out: FragmentOutput;
-    let clip_pos = screen_light.clip_from_world * in.world_position;
-    let ndc_pos = clip_pos.xyz / clip_pos.w;
-    let light_uv = vec2(0.5, -0.5) * ndc_pos.xy + vec2(0.5, 0.5);
-    let from_clip = textureSample(screen_image, screen_sampler, light_uv);
-    out.color = vec4(vec3(from_clip.xyz), 1.0);
+    // apply lighting
+    out.color = apply_pbr_lighting(pbr_input);
+
+    // TODO: add screen light lighting
+
+    // apply in-shader post processing (fog, alpha-premultiply, and also tonemapping, debanding if the camera is non-hdr)
+    // note this does not include fullscreen postprocessing effects like bloom.
+    out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+
+#endif
     return out;
 }
