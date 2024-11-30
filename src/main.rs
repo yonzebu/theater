@@ -8,7 +8,7 @@ use bevy::{math::vec3, prelude::*};
 mod debug;
 use debug::*;
 use screen_light::{ScreenLight, ScreenLightExtension, ScreenLightExtensionPlugin, ScreenLightPlugin};
-use script::{ScriptChoices, ScriptPlugin, ScriptRunner};
+use script::{ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner};
 use video::{VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream};
 mod script;
 mod video;
@@ -244,6 +244,7 @@ fn setup(
             BorderColor(Color::srgb(0.99, 0.69, 1.)),
             BackgroundColor(Color::srgba(0.8, 0.43, 1., 0.5)),
         ))
+        .observe(on_text_visible_box_clicked)
         .id();
     let script_runner = commands
         .spawn((
@@ -300,6 +301,25 @@ fn setup(
     ]));
 }
 
+fn on_text_visible_box_clicked(
+    trigger: Trigger<Pointer<Click>>, 
+    mut commands: Commands, 
+    with_children: Query<&Children>,
+    runners: Query<(Entity, &ScriptRunner)>
+) {
+    if let Some((runner_entity, runner)) = with_children
+        .get(trigger.entity())
+        .ok()
+        .and_then(|children| children.iter().find_map(|&child| runners.get(child).ok()))
+    {
+        if runner.is_line_finished() {
+            commands.trigger_targets(UpdateRunner::NextLine, runner_entity);
+        } else {
+            commands.trigger_targets(UpdateRunner::FinishLine, runner_entity);
+        }
+    }
+}
+
 fn update_chair_materials(
     mut commands: Commands,
     roots: Query<Entity, With<Chair>>,
@@ -326,7 +346,7 @@ fn update_chair_materials(
                     light: screen_light,
                 }
             })));
-            old_material.base_color = Color::NONE;
+            old_material.base_color.set_alpha(0.);
             old_material.alpha_mode = AlphaMode::Mask(1.0);
         }
     }

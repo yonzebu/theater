@@ -40,7 +40,7 @@ impl AnswerBlock {
     }
     pub fn get_response(&self, answer: usize) -> Option<&String> {
         match self {
-            Self::Single(s) => None,
+            Self::Single(_) => None,
             Self::Many(choices) => choices.get(answer).map(|answer| &answer.response),
         }
     }
@@ -232,7 +232,7 @@ impl AssetLoader for ScriptLoader {
 }
 
 /// triggered on a [`ScriptRunner`] to update its state in some way
-#[derive(Event)]
+#[derive(Debug, Event)]
 pub enum UpdateRunner {
     /// immediately finish displaying the current text
     FinishLine,
@@ -243,7 +243,7 @@ pub enum UpdateRunner {
 }
 
 /// triggered on a [`ScriptRunner`] to indicate certain state changes
-#[derive(Event)]
+#[derive(Debug, Event)]
 pub enum RunnerUpdated {
     Finished,
     NoScript,
@@ -251,7 +251,7 @@ pub enum RunnerUpdated {
 
 // a nicer version of this would have runners/choices automatically add/remove each other with
 // component hooks but that's not insignificant effort and i need to get this done
-#[derive(Component)]
+#[derive(Debug, Component)]
 #[require(Text)]
 #[component(on_add = ScriptRunner::on_add)]
 pub struct ScriptRunner {
@@ -268,10 +268,11 @@ pub struct ScriptRunner {
     /// number of bytes displayed so far
     displayed_bytes: usize,
     display_timer: Timer,
-    /// time since the current line starting displaying in timer ticks
+    /// time since the current line started displaying in timer ticks
     display_ticks: u32,
-    /// the tick time of the last displayed char
+    /// the timestamp of the last displayed char in timer ticks
     last_displayed_tick: u32,
+    finished_line: bool,
 }
 
 impl ScriptRunner {
@@ -288,6 +289,7 @@ impl ScriptRunner {
             ),
             display_ticks: 0,
             last_displayed_tick: 0,
+            finished_line: false
         }
     }
     pub fn pause(&mut self) {
@@ -299,11 +301,29 @@ impl ScriptRunner {
     pub fn paused(&self) -> bool {
         self.display_timer.paused()
     }
+    pub fn is_line_finished(&self) -> bool {
+        self.finished_line
+    }
+    pub fn reset(&mut self) {
+        self.current_entry = 0;
+        self.current_answer = None;
+        self.displayed_bytes = 0;
+        self.display_timer.reset();
+        self.display_ticks = 0;
+        self.last_displayed_tick = 0;
+        self.finished_line = false;
+    }
+
     fn reset_display(&mut self) {
         self.display_timer.reset();
         self.displayed_bytes = 0;
         self.display_ticks = 0;
         self.last_displayed_tick = 0;
+        self.finished_line = false;
+    }
+    fn finish_line(&mut self, line: &str) {
+        self.finished_line = true;
+        self.displayed_bytes = line.len();
     }
 
     fn on_add(mut deferred_world: DeferredWorld, entity: Entity, _: ComponentId) {
@@ -319,6 +339,7 @@ impl ScriptRunner {
         mut choices_containers: Query<&mut ScriptChoices>,
         scripts: Res<Assets<Script>>,
     ) {
+        println!("runner updated: {:?}", trigger.event());
         let Ok((mut runner, mut text)) = runners.get_mut(trigger.entity()) else {
             return;
         };
@@ -336,18 +357,20 @@ impl ScriptRunner {
             UpdateRunner::FinishLine => match (entry, runner.current_answer) {
                 (ScriptEntry::Line(s), None) | (ScriptEntry::Prompt { prompt: s, .. }, None) => {
                     text.0.clone_from(s);
+                    runner.finish_line(s);
                 }
                 (
                     ScriptEntry::Prompt {
-                        choices: AnswerBlock::Many(answers),
+                        choices,
                         ..
                     },
                     Some(index),
                 ) => {
-                    let Some(answer) = answers.get(index) else {
+                    let Some(response) = choices.get_response(index) else {
                         return;
                     };
-                    text.0.clone_from(&answer.response);
+                    text.0.clone_from(response);
+                    runner.finish_line(response);
                 }
                 _ => unreachable!(),
             },
@@ -460,6 +483,7 @@ fn update_script_runner_text(
         let Some(entry) = script.get_entry(runner.current_entry) else {
             continue;
         };
+        let current_answer = runner.current_answer;
         let mut extend_text = |s: &str| {
             let mut new_bytes = 0;
             // oh no
@@ -487,7 +511,7 @@ fn update_script_runner_text(
             runner.displayed_bytes += new_bytes;
         };
         let text_len;
-        match (entry, runner.current_answer) {
+        match (entry, current_answer) {
             (ScriptEntry::Line(line), None) => {
                 extend_text(line);
                 text_len = line.as_bytes().len();
@@ -509,8 +533,24 @@ fn update_script_runner_text(
             _ => unreachable!(),
         }
         if runner.displayed_bytes >= text_len {
-            // finished displaying?
+            runner.finish_line(&text);
         }
+    }
+}
+
+fn on_script_reload_reset_runners(
+    trigger: Trigger<AssetEvent<Script>>,
+    mut runners: Query<&mut ScriptRunner>
+) {
+    match trigger.event() {
+        AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::LoadedWithDependencies { id } => {
+            for mut runner in runners.iter_mut() {
+                if runner.script.id() == *id {
+                    runner.reset();
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -520,7 +560,10 @@ impl Plugin for ScriptPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<Script>()
             .init_asset_loader::<ScriptLoader>()
-            .add_systems(Update, update_script_runner_text);
+            .add_event::<UpdateRunner>()
+            .add_event::<RunnerUpdated>()
+            .add_systems(Update, update_script_runner_text)
+            .add_observer(on_script_reload_reset_runners);
     }
 }
 
