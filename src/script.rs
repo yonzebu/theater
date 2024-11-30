@@ -1,4 +1,4 @@
-use std::{borrow::Cow, error::Error, fmt::Display, time::Duration};
+use std::{borrow::Cow, error::Error, fmt::Display, ops::Deref, time::Duration};
 
 use bevy::{
     asset::{io::Reader, AssetLoader},
@@ -43,6 +43,9 @@ impl AnswerBlock {
             Self::Single(_) => None,
             Self::Many(choices) => choices.get(answer).map(|answer| &answer.response),
         }
+    }
+    pub fn answers_iter(&self) -> impl Iterator<Item = &String> {
+        (0..).map(|i| self.get_answer(i)).take_while(|answer| answer.is_some()).flatten()
     }
 }
 
@@ -245,6 +248,8 @@ pub enum UpdateRunner {
 /// triggered on a [`ScriptRunner`] to indicate certain state changes
 #[derive(Debug, Event)]
 pub enum RunnerUpdated {
+    HideChoices,
+    ShowChoices,
     Finished,
     NoScript,
 }
@@ -357,7 +362,10 @@ impl ScriptRunner {
             UpdateRunner::FinishLine => match (entry, runner.current_answer) {
                 (ScriptEntry::Line(s), None) | (ScriptEntry::Prompt { prompt: s, .. }, None) => {
                     text.0.clone_from(s);
-                    runner.finish_line(s);
+                    runner.finish_line(&text);
+                    if matches!(entry, ScriptEntry::Prompt { .. }) {
+                        commands.trigger_targets(RunnerUpdated::ShowChoices, runner.choices_display);
+                    }
                 }
                 (
                     ScriptEntry::Prompt {
@@ -370,7 +378,8 @@ impl ScriptRunner {
                         return;
                     };
                     text.0.clone_from(response);
-                    runner.finish_line(response);
+                    runner.finish_line(&text);
+                    commands.trigger_targets(RunnerUpdated::ShowChoices, runner.choices_display);
                 }
                 _ => unreachable!(),
             },
@@ -419,6 +428,7 @@ impl ScriptRunner {
                         runner.current_entry += 1;
                         text.0.clear();
                         runner.reset_display();
+                        commands.trigger_targets(RunnerUpdated::HideChoices, runner.choices_display);
                     }
                 }
                 (
@@ -434,6 +444,7 @@ impl ScriptRunner {
                     runner.current_answer = Some(index);
                     text.0.clear();
                     runner.reset_display();
+                    commands.trigger_targets(RunnerUpdated::HideChoices, runner.choices_display);
                 }
             },
         }
@@ -442,21 +453,85 @@ impl ScriptRunner {
 
 #[derive(Component)]
 #[require(Node)]
+#[component(on_add = ScriptChoices::on_add)]
 pub struct ScriptChoices {
     runner: Entity,
-    // for highlighting n stuff
-    active_choice: usize,
+    choice_display_root: Entity,
 }
 
 impl ScriptChoices {
-    pub fn new(runner: Entity) -> Self {
+    pub fn new(runner: Entity, choice_display_root: Entity) -> Self {
         ScriptChoices {
             runner,
-            active_choice: 0,
+            choice_display_root,
         }
     }
 
-    fn show_choices_systems() {}
+    fn on_add(mut deferred_world: DeferredWorld, entity: Entity, _: ComponentId) {
+        deferred_world
+            .commands()
+            .entity(entity)
+            .observe(ScriptChoices::on_runner_updated);
+    }
+
+    fn on_runner_updated(
+        trigger: Trigger<RunnerUpdated>,
+        mut commands: Commands,
+        runners: Query<&ScriptRunner>,
+        mut choices_displays: Query<(&mut ScriptChoices, Option<&Children>)>,
+        mut with_visibility: Query<&mut Visibility, Without<ScriptChoices>>,
+        choices: Query<&ScriptChoice>,
+        scripts: Res<Assets<Script>>,
+    ) {
+        match trigger.event() {
+            RunnerUpdated::HideChoices | RunnerUpdated::Finished | RunnerUpdated::NoScript => {
+                if let Some(mut choices_commands) = commands.get_entity(trigger.entity()) {
+                    if let Some((choices_display, children)) = choices_displays.get_mut(trigger.entity()).ok() {
+                        let to_remove = children
+                            .map(|children| children.deref())
+                            .unwrap_or(&[])
+                            .iter()
+                            .filter_map(|&child| choices.contains(child).then(|| child))
+                            .collect::<Vec<_>>();
+                        choices_commands.remove_children(&to_remove);
+                        if let Ok(mut root_visibility) = with_visibility.get_mut(choices_display.choice_display_root) {
+                            *root_visibility = Visibility::Hidden;
+                        }
+                    }
+                }
+            }
+            RunnerUpdated::ShowChoices => {
+                let (Some(mut choices_commands), Ok((choices_display, _))) = (
+                    commands.get_entity(trigger.entity()),
+                    choices_displays.get(trigger.entity())
+                ) else {
+                    return;
+                };
+                let Ok(runner) = runners.get(choices_display.runner) else {
+                    return;
+                };
+                let Some(script) = scripts.get(runner.script.id()) else {
+                    return;
+                };
+                let Some(entry) = script.get_entry(runner.current_entry) else {
+                    return;
+                };
+                match entry {
+                    ScriptEntry::Prompt { choices, .. } => {
+                        choices_commands.with_children(|builder| {
+                            for (i, answer) in choices.answers_iter().enumerate() {
+                                builder.spawn((ScriptChoice(i), Text(answer.clone())));
+                            }
+                        });
+                        if let Ok(mut root_visibility) = with_visibility.get_mut(choices_display.choice_display_root) {
+                            *root_visibility = Visibility::Inherited;
+                        }
+                    }
+                    ScriptEntry::Line(_) => return,
+                }
+            }
+        }
+    }
 }
 
 #[derive(Component)]
@@ -511,14 +586,17 @@ fn update_script_runner_text(
             runner.displayed_bytes += new_bytes;
         };
         let text_len;
+        let currently_prompt;
         match (entry, current_answer) {
             (ScriptEntry::Line(line), None) => {
                 extend_text(line);
                 text_len = line.as_bytes().len();
+                currently_prompt = false;
             }
             (ScriptEntry::Prompt { prompt, .. }, None) => {
                 extend_text(prompt);
                 text_len = prompt.as_bytes().len();
+                currently_prompt = true;
             }
             (
                 ScriptEntry::Prompt {
@@ -529,11 +607,14 @@ fn update_script_runner_text(
             ) => {
                 extend_text(&answers[answer_index].response);
                 text_len = answers[answer_index].response.as_bytes().len();
+                currently_prompt = false;
             }
             _ => unreachable!(),
         }
         if runner.displayed_bytes >= text_len {
-            runner.finish_line(&text);
+            if !runner.is_line_finished() && currently_prompt {
+                commands.trigger_targets(RunnerUpdated::ShowChoices, runner.choices_display);
+            }
         }
     }
 }

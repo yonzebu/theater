@@ -204,7 +204,8 @@ fn setup(
     }
 
     let script = assets.load("nonfinal/testscript.txt");
-    let mut script_runner = ScriptRunner::new(script.clone(), Entity::PLACEHOLDER, 10.0);
+    let script_choices_entity = commands.spawn_empty().id();
+    let mut script_runner = ScriptRunner::new(script.clone(), script_choices_entity, 10.0);
     script_runner.pause();
     let root = commands
         .spawn((
@@ -269,8 +270,9 @@ fn setup(
             ..default()
         },))
         .id();
-    let visible_choice_box = commands
-        .spawn((
+    commands
+        .entity(script_choices_entity)
+        .insert((
             Node {
                 display: Display::Flex,
                 flex_direction: FlexDirection::Column,
@@ -283,13 +285,12 @@ fn setup(
             BorderRadius::all(Val::Percent(20.)),
             BorderColor(Color::srgb(0.99, 0.69, 1.)),
             BackgroundColor(Color::srgba(0.8, 0.43, 1., 0.5)),
-            ScriptChoices::new(script_runner),
-        ))
-        .id();
+            ScriptChoices::new(script_runner, choice_box_wrapper),
+        ));
     commands.entity(root).add_child(choice_box_wrapper);
     commands
         .entity(choice_box_wrapper)
-        .add_child(visible_choice_box);
+        .add_child(script_choices_entity);
 
     commands.insert_resource(AssetsToLoad(vec![
         me_image.id().untyped(),
