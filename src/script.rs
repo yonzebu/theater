@@ -45,7 +45,10 @@ impl AnswerBlock {
         }
     }
     pub fn answers_iter(&self) -> impl Iterator<Item = &String> {
-        (0..).map(|i| self.get_answer(i)).take_while(|answer| answer.is_some()).flatten()
+        (0..)
+            .map(|i| self.get_answer(i))
+            .take_while(|answer| answer.is_some())
+            .flatten()
     }
 }
 
@@ -294,7 +297,7 @@ impl ScriptRunner {
             ),
             display_ticks: 0,
             last_displayed_tick: 0,
-            finished_line: false
+            finished_line: false,
         }
     }
     pub fn pause(&mut self) {
@@ -341,7 +344,6 @@ impl ScriptRunner {
         trigger: Trigger<UpdateRunner>,
         mut commands: Commands,
         mut runners: Query<(&mut ScriptRunner, &mut Text)>,
-        mut choices_containers: Query<&mut ScriptChoices>,
         scripts: Res<Assets<Script>>,
     ) {
         let Ok((mut runner, mut text)) = runners.get_mut(trigger.entity()) else {
@@ -363,16 +365,11 @@ impl ScriptRunner {
                     text.0.clone_from(s);
                     runner.finish_line(&text);
                     if matches!(entry, ScriptEntry::Prompt { .. }) {
-                        commands.trigger_targets(RunnerUpdated::ShowChoices, runner.choices_display);
+                        commands
+                            .trigger_targets(RunnerUpdated::ShowChoices, runner.choices_display);
                     }
                 }
-                (
-                    ScriptEntry::Prompt {
-                        choices,
-                        ..
-                    },
-                    Some(index),
-                ) => {
+                (ScriptEntry::Prompt { choices, .. }, Some(index)) => {
                     let Some(response) = choices.get_response(index) else {
                         return;
                     };
@@ -427,7 +424,8 @@ impl ScriptRunner {
                         runner.current_entry += 1;
                         text.0.clear();
                         runner.reset_display();
-                        commands.trigger_targets(RunnerUpdated::HideChoices, runner.choices_display);
+                        commands
+                            .trigger_targets(RunnerUpdated::HideChoices, runner.choices_display);
                     }
                 }
                 (
@@ -469,7 +467,10 @@ impl ScriptChoices {
     }
 
     fn on_add(mut deferred_world: DeferredWorld, entity: Entity, _: ComponentId) {
-        let choices = deferred_world.entity(entity).get::<ScriptChoices>().unwrap();
+        let choices = deferred_world
+            .entity(entity)
+            .get::<ScriptChoices>()
+            .unwrap();
         let visibility = if choices.displaying_choices {
             Visibility::Inherited
         } else {
@@ -495,7 +496,9 @@ impl ScriptChoices {
         match trigger.event() {
             RunnerUpdated::HideChoices | RunnerUpdated::Finished | RunnerUpdated::NoScript => {
                 if let Some(mut choices_commands) = commands.get_entity(trigger.entity()) {
-                    if let Some((mut choices_display, children)) = choices_displays.get_mut(trigger.entity()).ok() {
+                    if let Some((mut choices_display, children)) =
+                        choices_displays.get_mut(trigger.entity()).ok()
+                    {
                         if !choices_display.displaying_choices {
                             return;
                         }
@@ -507,7 +510,9 @@ impl ScriptChoices {
                             .filter_map(|&child| choices.contains(child).then(|| child))
                             .collect::<Vec<_>>();
                         choices_commands.remove_children(&to_remove);
-                        if let Ok(mut root_visibility) = with_visibility.get_mut(choices_display.choice_display_root) {
+                        if let Ok(mut root_visibility) =
+                            with_visibility.get_mut(choices_display.choice_display_root)
+                        {
                             *root_visibility = Visibility::Hidden;
                         }
                     }
@@ -516,7 +521,7 @@ impl ScriptChoices {
             RunnerUpdated::ShowChoices => {
                 let (Some(mut choices_commands), Ok((mut choices_display, _))) = (
                     commands.get_entity(trigger.entity()),
-                    choices_displays.get_mut(trigger.entity())
+                    choices_displays.get_mut(trigger.entity()),
                 ) else {
                     return;
                 };
@@ -540,7 +545,9 @@ impl ScriptChoices {
                                 builder.spawn((ScriptChoice(i), Text(answer.clone())));
                             }
                         });
-                        if let Ok(mut root_visibility) = with_visibility.get_mut(choices_display.choice_display_root) {
+                        if let Ok(mut root_visibility) =
+                            with_visibility.get_mut(choices_display.choice_display_root)
+                        {
                             *root_visibility = Visibility::Inherited;
                         }
                     }
@@ -566,35 +573,26 @@ impl ScriptChoice {
             .observe(ScriptChoice::on_stop_hover);
     }
     fn on_click(
-        trigger: Trigger<Pointer<Click>>, 
+        trigger: Trigger<Pointer<Click>>,
         mut commands: Commands,
         choices: Query<(&ScriptChoice, &Parent)>,
         choice_displays: Query<&ScriptChoices>,
     ) {
         if let Some((i, mut runner_commands)) = choices
             .get(trigger.entity())
-            .and_then(|(choice, parent)| {
-                Ok((choice.0, choice_displays.get(parent.get())?))
-            })
+            .and_then(|(choice, parent)| Ok((choice.0, choice_displays.get(parent.get())?)))
             .ok()
             .and_then(|(i, choice_display)| Some((i, commands.get_entity(choice_display.runner)?)))
         {
             runner_commands.trigger(UpdateRunner::ChooseAnswer(i));
         }
-
     }
-    fn on_start_hover(
-        trigger: Trigger<Pointer<Over>>, 
-        mut commands: Commands,
-    ) {
+    fn on_start_hover(trigger: Trigger<Pointer<Over>>, mut commands: Commands) {
         if let Some(mut commands) = commands.get_entity(trigger.entity()) {
             commands.insert(BackgroundColor(Color::srgba(0.867, 0.75, 0.93, 0.5)));
         }
     }
-    fn on_stop_hover(
-        trigger: Trigger<Pointer<Out>>, 
-        mut commands: Commands,
-    ) {
+    fn on_stop_hover(trigger: Trigger<Pointer<Out>>, mut commands: Commands) {
         if let Some(mut commands) = commands.get_entity(trigger.entity()) {
             commands.insert(BackgroundColor(Color::srgba(0.8, 0.43, 1., 0.)));
         }
@@ -687,10 +685,12 @@ fn update_script_runner_text(
 fn on_script_reload_reset_runners(
     trigger: Trigger<AssetEvent<Script>>,
     mut commands: Commands,
-    mut runners: Query<(&mut ScriptRunner, &mut Text)>
+    mut runners: Query<(&mut ScriptRunner, &mut Text)>,
 ) {
     match trigger.event() {
-        AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::LoadedWithDependencies { id } => {
+        AssetEvent::Added { id }
+        | AssetEvent::Modified { id }
+        | AssetEvent::LoadedWithDependencies { id } => {
             for (mut runner, mut text) in runners.iter_mut() {
                 if runner.script.id() == *id {
                     runner.reset();

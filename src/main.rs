@@ -7,12 +7,14 @@ use bevy::{math::vec3, prelude::*};
 
 mod debug;
 use debug::*;
-use screen_light::{ScreenLight, ScreenLightExtension, ScreenLightExtensionPlugin, ScreenLightPlugin};
+use screen_light::{
+    ScreenLight, ScreenLightExtension, ScreenLightExtensionPlugin, ScreenLightPlugin,
+};
 use script::{ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner};
 use video::{VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream};
+mod screen_light;
 mod script;
 mod video;
-mod screen_light;
 
 #[derive(Clone, Asset, TypePath, AsBindGroup)]
 struct Paper {}
@@ -270,23 +272,21 @@ fn setup(
             ..default()
         },))
         .id();
-    commands
-        .entity(script_choices_entity)
-        .insert((
-            Node {
-                display: Display::Flex,
-                flex_direction: FlexDirection::Column,
-                border: UiRect::all(Val::VMin(0.75)),
-                width: Val::Percent(100.),
-                height: Val::Percent(100.),
-                padding: UiRect::all(Val::VMin(1.)),
-                ..default()
-            },
-            BorderRadius::all(Val::Percent(20.)),
-            BorderColor(Color::srgb(0.99, 0.69, 1.)),
-            BackgroundColor(Color::srgba(0.8, 0.43, 1., 0.5)),
-            ScriptChoices::new(script_runner, choice_box_wrapper),
-        ));
+    commands.entity(script_choices_entity).insert((
+        Node {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            border: UiRect::all(Val::VMin(0.75)),
+            width: Val::Percent(100.),
+            height: Val::Percent(100.),
+            padding: UiRect::all(Val::VMin(1.)),
+            ..default()
+        },
+        BorderRadius::all(Val::Percent(20.)),
+        BorderColor(Color::srgb(0.99, 0.69, 1.)),
+        BackgroundColor(Color::srgba(0.8, 0.43, 1., 0.5)),
+        ScriptChoices::new(script_runner, choice_box_wrapper),
+    ));
     commands.entity(root).add_child(choice_box_wrapper);
     commands
         .entity(choice_box_wrapper)
@@ -303,10 +303,10 @@ fn setup(
 }
 
 fn on_text_visible_box_clicked(
-    trigger: Trigger<Pointer<Click>>, 
-    mut commands: Commands, 
+    trigger: Trigger<Pointer<Click>>,
+    mut commands: Commands,
     with_children: Query<&Children>,
-    runners: Query<(Entity, &ScriptRunner)>
+    runners: Query<(Entity, &ScriptRunner)>,
 ) {
     if let Some((runner_entity, runner)) = with_children
         .get(trigger.entity())
@@ -325,9 +325,14 @@ fn update_chair_materials(
     mut commands: Commands,
     roots: Query<Entity, With<Chair>>,
     with_children: Query<&Children>,
-    not_updateds: Query<(Entity, &MeshMaterial3d<StandardMaterial>), Without<MeshMaterial3d<ExtendedMaterial<StandardMaterial, ScreenLightExtension>>>>,
+    not_updateds: Query<
+        (Entity, &MeshMaterial3d<StandardMaterial>),
+        Without<MeshMaterial3d<ExtendedMaterial<StandardMaterial, ScreenLightExtension>>>,
+    >,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut extended_materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, ScreenLightExtension>>>,
+    mut extended_materials: ResMut<
+        Assets<ExtendedMaterial<StandardMaterial, ScreenLightExtension>>,
+    >,
     screen_light: Query<Entity, With<ScreenLight>>,
 ) {
     let Ok(screen_light) = screen_light.get_single() else {
@@ -341,12 +346,14 @@ fn update_chair_materials(
             let Some(old_material) = materials.get_mut(old_material_handle.id()) else {
                 continue;
             };
-            commands.entity(entity).insert(MeshMaterial3d(extended_materials.add(ExtendedMaterial {
-                base: old_material.clone(),
-                extension: ScreenLightExtension {
-                    light: screen_light,
-                }
-            })));
+            commands
+                .entity(entity)
+                .insert(MeshMaterial3d(extended_materials.add(ExtendedMaterial {
+                    base: old_material.clone(),
+                    extension: ScreenLightExtension {
+                        light: screen_light,
+                    },
+                })));
             old_material.base_color.set_alpha(0.);
             old_material.alpha_mode = AlphaMode::Mask(1.0);
         }

@@ -1,28 +1,44 @@
 //! this is held together by glue and toothpicks
 
+use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::DerefMut;
-use std::hash::Hash;
 
 use bevy::ecs::entity::EntityHashMap;
 use bevy::ecs::system::lifetimeless::{Read, SQuery, SRes};
 use bevy::ecs::system::SystemParamItem;
-use bevy::pbr::{prepare_lights, DrawPrepass, ExtendedMaterial, LightViewEntities, MaterialPipelineKey, MeshPipelineKey, NotShadowCaster, PreparedMaterial, PrepassPipeline, RenderMaterialInstances, RenderMeshInstanceFlags, RenderMeshInstances, RenderVisibleMeshEntities, Shadow, ShadowBinKey, ShadowView, SimulationLightSystems, ViewLightEntities, VisibleClusterableObjects, VisibleMeshEntities};
+use bevy::pbr::{
+    prepare_lights, DrawPrepass, ExtendedMaterial, LightViewEntities, MaterialPipelineKey,
+    MeshPipelineKey, NotShadowCaster, PreparedMaterial, PrepassPipeline, RenderMaterialInstances,
+    RenderMeshInstanceFlags, RenderMeshInstances, RenderVisibleMeshEntities, Shadow, ShadowBinKey,
+    ShadowView, SimulationLightSystems, ViewLightEntities, VisibleMeshEntities,
+};
 use bevy::render::camera::CameraProjection;
 use bevy::render::mesh::RenderMesh;
 use bevy::render::primitives::{Aabb, Frustum};
 use bevy::render::render_asset::{prepare_assets, RenderAssets};
 use bevy::render::render_phase::{BinnedRenderPhaseType, DrawFunctions, ViewBinnedRenderPhases};
-use bevy::render::render_resource::binding_types::{sampler, texture_2d, texture_depth_2d, uniform_buffer};
+use bevy::render::render_resource::binding_types::{
+    sampler, texture_2d, texture_depth_2d, uniform_buffer,
+};
+use bevy::render::render_resource::{
+    encase, AsBindGroup, AsBindGroupError, BindGroupLayout, BindGroupLayoutEntries,
+    BindGroupLayoutEntry, BufferInitDescriptor, BufferUsages, Extent3d, OwnedBindingResource,
+    PipelineCache, SamplerBindingType, ShaderStages, ShaderType, SpecializedMeshPipelines,
+    TextureAspect, TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType,
+    TextureUsages, TextureView, TextureViewDescriptor, TextureViewDimension, UnpreparedBindGroup,
+};
 use bevy::render::renderer::RenderDevice;
 use bevy::render::sync_component::SyncComponentPlugin;
 use bevy::render::sync_world::{MainEntity, RenderEntity, TemporaryRenderEntity};
 use bevy::render::texture::{CachedTexture, DepthAttachment, GpuImage, TextureCache};
-use bevy::render::view::{check_visibility, ExtractedView, NoFrustumCulling, RenderLayers, VisibilityRange, VisibilitySystems, VisibleEntityRanges};
+use bevy::render::view::{
+    check_visibility, ExtractedView, NoFrustumCulling, RenderLayers, VisibilityRange,
+    VisibilitySystems, VisibleEntityRanges,
+};
 use bevy::render::{Extract, Render, RenderApp, RenderSet};
 use bevy::utils::Parallel;
-use bevy::{pbr::MaterialExtension, pbr::update_spot_light_frusta, prelude::*};
-use bevy::render::render_resource::{encase, AsBindGroup, AsBindGroupError, BindGroupLayout, BindGroupLayoutEntries, BindGroupLayoutEntry, Buffer, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, Extent3d, OwnedBindingResource, PipelineCache, SamplerBindingType, ShaderStages, ShaderType, SpecializedMeshPipelines, TextureAspect, TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor, TextureViewDimension, UnpreparedBindGroup};
+use bevy::{pbr::MaterialExtension, prelude::*};
 
 use crate::video::ReceiveFrame;
 
@@ -54,7 +70,7 @@ impl ReceiveFrame for ScreenLight {
 
 #[derive(Component)]
 struct ScreenLightEntity {
-    light_entity: Entity
+    light_entity: Entity,
 }
 
 #[derive(Component)]
@@ -84,11 +100,11 @@ impl AsBindGroup for ScreenLightExtension {
     type Data = ();
     type Param = (
         SRes<ExtractedScreenLights>,
-        SRes<RenderAssets<GpuImage>>, 
+        SRes<RenderAssets<GpuImage>>,
         Option<SRes<ViewScreenLightShadowTexture>>,
         SQuery<Read<ExtractedScreenLight>>,
     );
-    
+
     fn label() -> Option<&'static str> {
         Some("screen light extension")
     }
@@ -96,46 +112,64 @@ impl AsBindGroup for ScreenLightExtension {
         &self,
         _layout: &BindGroupLayout,
         render_device: &RenderDevice,
-        (screen_lights_map, images, shadow_texture, screen_lights): &mut SystemParamItem<'_, '_, Self::Param>,
+        (screen_lights_map, images, shadow_texture, screen_lights): &mut SystemParamItem<
+            '_,
+            '_,
+            Self::Param,
+        >,
     ) -> Result<UnpreparedBindGroup<Self::Data>, AsBindGroupError> {
-        let shadow_texture = shadow_texture.as_ref().ok_or(AsBindGroupError::RetryNextUpdate)?;
+        let shadow_texture = shadow_texture
+            .as_ref()
+            .ok_or(AsBindGroupError::RetryNextUpdate)?;
         let screen_light = screen_lights_map
             .get(&self.light)
             .and_then(|light| screen_lights.get(light.id()).ok())
             .ok_or(AsBindGroupError::RetryNextUpdate)?;
-        
-        let image = images.get(screen_light.image.id()).ok_or(AsBindGroupError::RetryNextUpdate)?;
-        
+
+        let image = images
+            .get(screen_light.image.id())
+            .ok_or(AsBindGroupError::RetryNextUpdate)?;
+
         let mut size_buf = encase::UniformBuffer::new(Vec::new());
         size_buf.write(&screen_light.uniform).unwrap();
         let uniform = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: "screen light uniform".into(),
             contents: size_buf.as_ref(),
-            usage: BufferUsages::COPY_DST | BufferUsages::UNIFORM
+            usage: BufferUsages::COPY_DST | BufferUsages::UNIFORM,
         });
         Ok(UnpreparedBindGroup {
             bindings: vec![
                 (96, OwnedBindingResource::Buffer(uniform)),
-                (97, OwnedBindingResource::TextureView(shadow_texture.texture_view.clone())),
-                (98, OwnedBindingResource::TextureView(image.texture_view.clone())),
-                (99, OwnedBindingResource::Sampler(image.sampler.clone()))
+                (
+                    97,
+                    OwnedBindingResource::TextureView(shadow_texture.texture_view.clone()),
+                ),
+                (
+                    98,
+                    OwnedBindingResource::TextureView(image.texture_view.clone()),
+                ),
+                (99, OwnedBindingResource::Sampler(image.sampler.clone())),
             ],
-            data: ()
+            data: (),
         })
     }
     fn bind_group_layout_entries(_render_device: &RenderDevice) -> Vec<BindGroupLayoutEntry>
     where
-        Self: Sized 
+        Self: Sized,
     {
         BindGroupLayoutEntries::with_indices(
-            ShaderStages::FRAGMENT, 
+            ShaderStages::FRAGMENT,
             (
                 (96, uniform_buffer::<ScreenLightUniform>(false)),
                 (97, texture_depth_2d()),
-                (98, texture_2d(TextureSampleType::Float { filterable: true })),
-                (99, sampler(SamplerBindingType::Filtering))
-            )
-        ).to_vec()
+                (
+                    98,
+                    texture_2d(TextureSampleType::Float { filterable: true }),
+                ),
+                (99, sampler(SamplerBindingType::Filtering)),
+            ),
+        )
+        .to_vec()
     }
 }
 
@@ -149,16 +183,16 @@ pub struct ScreenLightPlugin;
 
 impl Plugin for ScreenLightPlugin {
     fn build(&self, app: &mut App) {
-        app
-            .add_plugins(SyncComponentPlugin::<ScreenLight>::default())
+        app.add_plugins(SyncComponentPlugin::<ScreenLight>::default())
             .add_systems(
-                PostUpdate, 
+                PostUpdate,
                 (
                     update_screen_light_frusta
                         .in_set(SimulationLightSystems::UpdateLightFrusta)
                         .after(TransformSystem::TransformPropagate)
                         .after(SimulationLightSystems::AssignLightsToClusters),
-                    check_visibility::<With<ScreenLight>>.in_set(VisibilitySystems::CheckVisibility),
+                    check_visibility::<With<ScreenLight>>
+                        .in_set(VisibilitySystems::CheckVisibility),
                     check_screen_light_mesh_visibility
                         .in_set(SimulationLightSystems::CheckLightVisibility)
                         .after(VisibilitySystems::CalculateBounds)
@@ -168,35 +202,41 @@ impl Plugin for ScreenLightPlugin {
                         // because that resets entity `ViewVisibility` for the first view
                         // which would override any results from this otherwise
                         .after(VisibilitySystems::CheckVisibility),
-                )
-            );
-        
-        let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
-            return;
-        };
-        render_app.init_resource::<ExtractedScreenLights>()
-            .add_systems(ExtractSchedule, extract_screen_lights)
-            .add_systems(
-                Render,
-                (
-                    prepare_screen_lights
-                        .in_set(RenderSet::ManageViews)
-                        .after(prepare_lights)
-                        .after(prepare_assets::<GpuImage>),
                 ),
             );
 
-            render_app.world_mut().add_observer(|trigger: Trigger<OnAdd, ExtractedScreenLight>, mut commands: Commands| {    
+        let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
+            return;
+        };
+        render_app
+            .init_resource::<ExtractedScreenLights>()
+            .add_systems(ExtractSchedule, extract_screen_lights)
+            .add_systems(
+                Render,
+                (prepare_screen_lights
+                    .in_set(RenderSet::ManageViews)
+                    .after(prepare_lights)
+                    .after(prepare_assets::<GpuImage>),),
+            );
+
+        render_app.world_mut().add_observer(
+            |trigger: Trigger<OnAdd, ExtractedScreenLight>, mut commands: Commands| {
                 if let Some(mut entity) = commands.get_entity(trigger.entity()) {
                     entity.insert(LightViewEntities::default());
                 }
-            });
-            render_app.world_mut().add_observer(|trigger: Trigger<OnRemove, ExtractedScreenLight>, mut commands: Commands| {
+            },
+        );
+        render_app.world_mut().add_observer(
+            |trigger: Trigger<OnRemove, ExtractedScreenLight>, mut commands: Commands| {
                 if let Some(mut entity) = commands.get_entity(trigger.entity()) {
                     entity.remove::<LightViewEntities>();
                 }
-            });
-            render_app.world_mut().add_observer(|trigger: Trigger<OnRemove, ExtractedScreenLight>, query: Query<&LightViewEntities>, mut commands: Commands| {
+            },
+        );
+        render_app.world_mut().add_observer(
+            |trigger: Trigger<OnRemove, ExtractedScreenLight>,
+             query: Query<&LightViewEntities>,
+             mut commands: Commands| {
                 if let Ok(light_view_entities) = query.get(trigger.entity()) {
                     for light_views in light_view_entities.values() {
                         for &light_view in light_views.iter() {
@@ -206,7 +246,8 @@ impl Plugin for ScreenLightPlugin {
                         }
                     }
                 }
-            });
+            },
+        );
     }
 }
 
@@ -218,30 +259,32 @@ where
     M::Data: PartialEq + Eq + Hash + Clone,
 {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostUpdate, update_screen_light_materials::<M>.after(update_screen_light_frusta));
-        
+        app.add_systems(
+            PostUpdate,
+            update_screen_light_materials::<M>.after(update_screen_light_frusta),
+        );
+
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };
-        render_app
-            .add_systems(
-                Render,
-                (
-                    queue_screen_light_shadows::<M>
-                        .in_set(RenderSet::QueueMeshes)
-                        .after(prepare_assets::<PreparedMaterial<M>>),
-                    // queue_screen_light_shadows::<ExtendedMaterial<M, ScreenLightExtension>>
-                    //     .in_set(RenderSet::QueueMeshes)
-                    //     .after(prepare_assets::<PreparedMaterial<ExtendedMaterial<M, ScreenLightExtension>>>),
-                ),
-            );
+        render_app.add_systems(
+            Render,
+            (
+                queue_screen_light_shadows::<M>
+                    .in_set(RenderSet::QueueMeshes)
+                    .after(prepare_assets::<PreparedMaterial<M>>),
+                // queue_screen_light_shadows::<ExtendedMaterial<M, ScreenLightExtension>>
+                //     .in_set(RenderSet::QueueMeshes)
+                //     .after(prepare_assets::<PreparedMaterial<ExtendedMaterial<M, ScreenLightExtension>>>),
+            ),
+        );
     }
 }
 
 fn update_screen_light_materials<M: Material>(
     screen_lights: Query<Entity, (With<ScreenLight>, Changed<ScreenLight>)>,
     assets: Res<Assets<ExtendedMaterial<M, ScreenLightExtension>>>,
-    mut asset_events: EventWriter<AssetEvent<ExtendedMaterial<M, ScreenLightExtension>>>
+    mut asset_events: EventWriter<AssetEvent<ExtendedMaterial<M, ScreenLightExtension>>>,
 ) {
     for (id, material) in assets.iter() {
         if screen_lights.contains(material.extension.light) {
@@ -250,19 +293,19 @@ fn update_screen_light_materials<M: Material>(
     }
 }
 
-/// copied from [`update_spot_light_frusta`] with several modifications
 fn update_screen_light_frusta(
     mut views: Query<
         (&GlobalTransform, &Projection, &mut Frustum),
-        (Or<(Changed<GlobalTransform>, Changed<Projection>)>, With<ScreenLight>),
+        (
+            Or<(Changed<GlobalTransform>, Changed<Projection>)>,
+            With<ScreenLight>,
+        ),
     >,
 ) {
     for (transform, projection, mut frustum) in &mut views {
         *frustum = projection.compute_frustum(transform);
     }
 }
-
-
 
 fn shrink_entities(visible_entities: &mut Vec<Entity>) {
     // Check that visible entities capacity() is no more than two times greater than len()
@@ -281,13 +324,10 @@ fn shrink_entities(visible_entities: &mut Vec<Entity>) {
 }
 
 fn check_screen_light_mesh_visibility(
-    mut screen_lights: Query<(
-        &ScreenLight,
-        &GlobalTransform,
-        &Frustum,
-        &mut VisibleMeshEntities,
-        Option<&RenderLayers>,
-    )>,
+    mut screen_lights: Query<
+        (&Frustum, &mut VisibleMeshEntities, Option<&RenderLayers>),
+        With<ScreenLight>,
+    >,
     mut visible_entity_query: Query<
         (
             Entity,
@@ -309,13 +349,7 @@ fn check_screen_light_mesh_visibility(
     mut spot_visible_entities_queue: Local<Parallel<Vec<Entity>>>,
 ) {
     let visible_entity_ranges = visible_entity_ranges.as_deref();
-    for (
-        screen_light, 
-        transform, 
-        frustum, 
-        mut visible_entities, 
-        maybe_view_mask
-    ) in screen_lights.iter_mut() {
+    for (frustum, mut visible_entities, maybe_view_mask) in screen_lights.iter_mut() {
         visible_entities.clear();
 
         let view_mask = maybe_view_mask.unwrap_or_default();
@@ -323,7 +357,7 @@ fn check_screen_light_mesh_visibility(
         visible_entity_query.par_iter_mut().for_each_init(
             || spot_visible_entities_queue.borrow_local_mut(),
             |spot_visible_entities_local_queue,
-                (
+             (
                 entity,
                 inherited_visibility,
                 mut view_visibility,
@@ -423,7 +457,8 @@ fn extract_screen_lights(
         view_visibility,
         frustum,
         projection,
-    ) in screen_lights.iter() {
+    ) in screen_lights.iter()
+    {
         // if !view_visibility.get() {
         //     continue;
         // }
@@ -462,34 +497,21 @@ fn extract_screen_lights(
                 *frustum,
             ),
         ));
-        
     }
     *previous_lights_len = lights_to_spawn.len();
     commands.insert_or_spawn_batch(lights_to_spawn);
-
 }
-
 
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_screen_lights(
     mut commands: Commands,
     mut texture_cache: ResMut<TextureCache>,
     render_device: Res<RenderDevice>,
-    mut views: Query<
-        (
-            Entity,
-            &mut ViewLightEntities,
-        ),
-        (With<Camera3d>, With<ExtractedView>),
-    >,
+    mut views: Query<(Entity, &mut ViewLightEntities), (With<Camera3d>, With<ExtractedView>)>,
     mut shadow_render_phases: ResMut<ViewBinnedRenderPhases<Shadow>>,
-    screen_lights: Query<(
-        Entity,
-        &ExtractedScreenLight,
-        &Frustum,
-    )>,
+    screen_lights: Query<(Entity, &ExtractedScreenLight, &Frustum)>,
     mut light_view_entities: Query<&mut LightViewEntities>,
-    images: Res<RenderAssets<GpuImage>>
+    images: Res<RenderAssets<GpuImage>>,
 ) {
     // set up light data for each view
     for (entity, mut view_light_entities) in views.iter_mut() {
@@ -508,20 +530,20 @@ pub fn prepare_screen_lights(
         };
         let shadow_map = texture_cache.get(
             &render_device,
-            TextureDescriptor { 
-                label: "screen light shadow map".into(), 
+            TextureDescriptor {
+                label: "screen light shadow map".into(),
                 size: Extent3d {
                     width: image.texture.width(),
                     height: image.texture.height(),
                     depth_or_array_layers: 1,
-                }, 
-                mip_level_count: 1, 
-                sample_count: 1, 
-                dimension: TextureDimension::D2, 
-                format: TextureFormat::Depth32Float, 
-                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::RENDER_ATTACHMENT, 
-                view_formats: &[], 
-            }
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Depth32Float,
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            },
         );
         let shadow_map_view = shadow_map.texture.create_view(&TextureViewDescriptor {
             label: "screen light shadow map view".into(),
@@ -548,8 +570,8 @@ pub fn prepare_screen_lights(
                 viewport: UVec4::new(
                     0,
                     0,
-                    screen_light.uniform.image_size.x, 
-                    screen_light.uniform.image_size.y
+                    screen_light.uniform.image_size.x,
+                    screen_light.uniform.image_size.y,
                 ),
                 world_from_view: screen_light.transform,
                 clip_from_view: screen_light.clip_from_view,
@@ -573,7 +595,7 @@ pub fn prepare_screen_lights(
             texture_view: shadow_map_view,
         });
     }
-    
+
     // FIXME: this might be important to keep but i'm worried about it breaking something
     // // Despawn light-view entities for views that no longer exist
     // for mut entities in &mut light_view_entities {
@@ -583,9 +605,7 @@ pub fn prepare_screen_lights(
     //         despawn_entities(&mut commands, light_view_entities);
     //     }
     // }
-
 }
-
 
 // this can't rely on [`queue_shadows`] bc this checks for kind of light
 #[allow(clippy::too_many_arguments)]
@@ -605,7 +625,7 @@ fn queue_screen_light_shadows<M: Material>(
 ) where
     M::Data: PartialEq + Eq + Hash + Clone,
 {
-    for (entity, view_lights) in &view_lights {
+    for (view_entity, view_lights) in &view_lights {
         let draw_shadow_mesh = shadow_draw_functions.read().id::<DrawPrepass<M>>();
         for view_light_entity in view_lights.lights.iter().copied() {
             let Ok(light_entity) = screen_light_entities.get(view_light_entity) else {
@@ -613,8 +633,10 @@ fn queue_screen_light_shadows<M: Material>(
             };
             let shadow_phase = shadow_render_phases.get_mut(&view_light_entity).unwrap();
 
-            let visible_entities = screen_light_entities_visibility.get(light_entity.light_entity).unwrap();
-            
+            let visible_entities = screen_light_entities_visibility
+                .get(light_entity.light_entity)
+                .unwrap();
+
             let light_key = MeshPipelineKey::DEPTH_PREPASS;
 
             for (entity, main_entity) in visible_entities.iter().copied() {

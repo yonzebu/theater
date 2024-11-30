@@ -9,7 +9,11 @@ use std::{
 };
 
 use bevy::{
-    asset::{AssetLoader, RenderAssetUsages}, ecs::system::{lifetimeless::SResMut, StaticSystemParam, SystemParam}, pbr::{ExtendedMaterial, MaterialExtension}, prelude::*, render::render_resource::{Extent3d, TextureDimension, TextureFormat}, tasks::AsyncComputeTaskPool
+    asset::{AssetLoader, RenderAssetUsages},
+    ecs::system::{lifetimeless::SResMut, StaticSystemParam, SystemParam},
+    prelude::*,
+    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+    tasks::AsyncComputeTaskPool,
 };
 use ffmpeg_next::{
     self as ffmpeg, codec, decoder,
@@ -96,13 +100,12 @@ impl VideoDecoder {
                         scaled = frame::Video::empty();
                         self.scaler.0.run(&decoded, &mut scaled).unwrap();
 
-                        let _ = self.send_frames
-                            .send(DecodedFrame {
-                                width: scaled.width(),
-                                height: scaled.height(),
-                                data: scaled.data(0).to_owned(),
-                                pts: decoded.pts().unwrap(),
-                            });
+                        let _ = self.send_frames.send(DecodedFrame {
+                            width: scaled.width(),
+                            height: scaled.height(),
+                            data: scaled.data(0).to_owned(),
+                            pts: decoded.pts().unwrap(),
+                        });
                     }
                     Err(ffmpeg::Error::Other { errno: EAGAIN }) => break,
                     Err(e) => panic!("receive frame error: {e:?}"),
@@ -278,7 +281,7 @@ impl AssetLoader for VideoStreamLoader {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, SystemSet)]
 pub enum VideoSet {
     UpdateStreams,
-    UpdatePlayers
+    UpdatePlayers,
 }
 
 pub struct VideoPlugin;
@@ -289,7 +292,10 @@ impl Plugin for VideoPlugin {
         app.init_asset::<VideoStream>()
             .init_asset_loader::<VideoStreamLoader>()
             .add_systems(PostUpdate, update_videos.in_set(VideoSet::UpdateStreams))
-            .configure_sets(PostUpdate, VideoSet::UpdateStreams.before(VideoSet::UpdatePlayers));
+            .configure_sets(
+                PostUpdate,
+                VideoSet::UpdateStreams.before(VideoSet::UpdatePlayers),
+            );
     }
 }
 
@@ -314,7 +320,9 @@ impl ReceiveFrame for StandardMaterial {
     type SystemParam = ();
     #[inline]
     fn should_receive(&self, id: impl Into<AssetId<Image>>) -> bool {
-        self.base_color_texture.as_ref().map_or(true, |h| h.id() != id.into())
+        self.base_color_texture
+            .as_ref()
+            .map_or(true, |h| h.id() != id.into())
     }
     #[inline]
     fn receive_frame(
@@ -352,7 +360,10 @@ impl<R: ReceiveFrame> Default for VideoPlayerPlugin<R> {
 
 impl<R: ReceiveFrame + Component> Plugin for VideoPlayerPlugin<R> {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostUpdate, update_receivers_from_players::<R>.in_set(VideoSet::UpdatePlayers));
+        app.add_systems(
+            PostUpdate,
+            update_receivers_from_players::<R>.in_set(VideoSet::UpdatePlayers),
+        );
     }
 }
 
