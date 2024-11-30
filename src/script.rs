@@ -344,7 +344,6 @@ impl ScriptRunner {
         mut choices_containers: Query<&mut ScriptChoices>,
         scripts: Res<Assets<Script>>,
     ) {
-        println!("runner updated: {:?}", trigger.event());
         let Ok((mut runner, mut text)) = runners.get_mut(trigger.entity()) else {
             return;
         };
@@ -457,6 +456,7 @@ impl ScriptRunner {
 pub struct ScriptChoices {
     runner: Entity,
     choice_display_root: Entity,
+    displaying_choices: bool,
 }
 
 impl ScriptChoices {
@@ -464,14 +464,23 @@ impl ScriptChoices {
         ScriptChoices {
             runner,
             choice_display_root,
+            displaying_choices: false,
         }
     }
 
     fn on_add(mut deferred_world: DeferredWorld, entity: Entity, _: ComponentId) {
-        deferred_world
-            .commands()
+        let choices = deferred_world.entity(entity).get::<ScriptChoices>().unwrap();
+        let visibility = if choices.displaying_choices {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        let choice_display_root = choices.choice_display_root;
+        let mut commands = deferred_world.commands();
+        commands
             .entity(entity)
             .observe(ScriptChoices::on_runner_updated);
+        commands.entity(choice_display_root).insert(visibility);
     }
 
     fn on_runner_updated(
@@ -486,7 +495,11 @@ impl ScriptChoices {
         match trigger.event() {
             RunnerUpdated::HideChoices | RunnerUpdated::Finished | RunnerUpdated::NoScript => {
                 if let Some(mut choices_commands) = commands.get_entity(trigger.entity()) {
-                    if let Some((choices_display, children)) = choices_displays.get_mut(trigger.entity()).ok() {
+                    if let Some((mut choices_display, children)) = choices_displays.get_mut(trigger.entity()).ok() {
+                        if !choices_display.displaying_choices {
+                            return;
+                        }
+                        choices_display.displaying_choices = false;
                         let to_remove = children
                             .map(|children| children.deref())
                             .unwrap_or(&[])
@@ -501,12 +514,16 @@ impl ScriptChoices {
                 }
             }
             RunnerUpdated::ShowChoices => {
-                let (Some(mut choices_commands), Ok((choices_display, _))) = (
+                let (Some(mut choices_commands), Ok((mut choices_display, _))) = (
                     commands.get_entity(trigger.entity()),
-                    choices_displays.get(trigger.entity())
+                    choices_displays.get_mut(trigger.entity())
                 ) else {
                     return;
                 };
+                if choices_display.displaying_choices {
+                    return;
+                }
+                choices_display.displaying_choices = true;
                 let Ok(runner) = runners.get(choices_display.runner) else {
                     return;
                 };
@@ -536,12 +553,57 @@ impl ScriptChoices {
 
 #[derive(Component)]
 #[require(Text)]
+#[component(on_add = ScriptChoice::on_add)]
 pub struct ScriptChoice(usize);
+
+impl ScriptChoice {
+    fn on_add(mut deferred_world: DeferredWorld, entity: Entity, _: ComponentId) {
+        deferred_world
+            .commands()
+            .entity(entity)
+            .observe(ScriptChoice::on_click)
+            .observe(ScriptChoice::on_start_hover)
+            .observe(ScriptChoice::on_stop_hover);
+    }
+    fn on_click(
+        trigger: Trigger<Pointer<Click>>, 
+        mut commands: Commands,
+        choices: Query<(&ScriptChoice, &Parent)>,
+        choice_displays: Query<&ScriptChoices>,
+    ) {
+        if let Some((i, mut runner_commands)) = choices
+            .get(trigger.entity())
+            .and_then(|(choice, parent)| {
+                Ok((choice.0, choice_displays.get(parent.get())?))
+            })
+            .ok()
+            .and_then(|(i, choice_display)| Some((i, commands.get_entity(choice_display.runner)?)))
+        {
+            runner_commands.trigger(UpdateRunner::ChooseAnswer(i));
+        }
+
+    }
+    fn on_start_hover(
+        trigger: Trigger<Pointer<Over>>, 
+        mut commands: Commands,
+    ) {
+        if let Some(mut commands) = commands.get_entity(trigger.entity()) {
+            commands.insert(BackgroundColor(Color::srgba(0.867, 0.75, 0.93, 0.5)));
+        }
+    }
+    fn on_stop_hover(
+        trigger: Trigger<Pointer<Out>>, 
+        mut commands: Commands,
+    ) {
+        if let Some(mut commands) = commands.get_entity(trigger.entity()) {
+            commands.insert(BackgroundColor(Color::srgba(0.8, 0.43, 1., 0.)));
+        }
+    }
+}
 
 fn update_script_runner_text(
     mut commands: Commands,
     mut runners: Query<(&mut ScriptRunner, &mut Text)>,
-    mut choice_displays: Query<(&ScriptChoice, &Node, &Children)>,
     scripts: Res<Assets<Script>>,
     time: Res<Time>,
 ) {
@@ -612,8 +674,11 @@ fn update_script_runner_text(
             _ => unreachable!(),
         }
         if runner.displayed_bytes >= text_len {
-            if !runner.is_line_finished() && currently_prompt {
-                commands.trigger_targets(RunnerUpdated::ShowChoices, runner.choices_display);
+            if !runner.is_line_finished() {
+                runner.finish_line(&text.0);
+                if currently_prompt {
+                    commands.trigger_targets(RunnerUpdated::ShowChoices, runner.choices_display);
+                }
             }
         }
     }
@@ -621,13 +686,16 @@ fn update_script_runner_text(
 
 fn on_script_reload_reset_runners(
     trigger: Trigger<AssetEvent<Script>>,
-    mut runners: Query<&mut ScriptRunner>
+    mut commands: Commands,
+    mut runners: Query<(&mut ScriptRunner, &mut Text)>
 ) {
     match trigger.event() {
         AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::LoadedWithDependencies { id } => {
-            for mut runner in runners.iter_mut() {
+            for (mut runner, mut text) in runners.iter_mut() {
                 if runner.script.id() == *id {
                     runner.reset();
+                    text.0.clear();
+                    commands.trigger_targets(RunnerUpdated::HideChoices, runner.choices_display);
                 }
             }
         }
