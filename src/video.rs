@@ -237,10 +237,18 @@ impl VideoDecoder {
                         Err(e) => panic!("receive frame error: {e:?}"),
                     }
                     if decoded.rate() != self.audio_decoder.rate() {
-                        println!("decoder rate: {}, decoded rate: {}", self.audio_decoder.rate(), decoded.rate());
+                        println!(
+                            "decoder rate: {}, decoded rate: {}",
+                            self.audio_decoder.rate(),
+                            decoded.rate()
+                        );
                     }
                     if decoded.channels() != self.audio_decoder.channels() {
-                        println!("decoder channels: {}, decoded channels: {}", self.audio_decoder.channels(), decoded.channels());
+                        println!(
+                            "decoder channels: {}, decoded channels: {}",
+                            self.audio_decoder.channels(),
+                            decoded.channels()
+                        );
                     }
                 }
                 let _ = self.send_audio.send(DecodedAudio {
@@ -333,7 +341,7 @@ impl VideoStream {
         );
         println!(
             "audio stream stuff: time_base = {:?}, start_time={}, duration = {}, frames = {}, sample rate = {:?}, avg frame rate = {:?}",
-            audio_stream.time_base(), audio_stream.start_time(), audio_stream.duration(), audio_stream.frames(), audio_stream.rate(), audio_stream.avg_frame_rate(), 
+            audio_stream.time_base(), audio_stream.start_time(), audio_stream.duration(), audio_stream.frames(), audio_stream.rate(), audio_stream.avg_frame_rate(),
         );
         let video_time_base = video_stream.time_base();
         let video_start_time = video_stream.start_time();

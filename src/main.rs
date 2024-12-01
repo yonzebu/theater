@@ -87,8 +87,12 @@ fn setup(
     // commands.spawn((PointLight::default(), Transform::from_xyz(0., 2., -9.)));
     let video_stream = assets.load::<VideoStream>("nonfinal/testshow.mp4");
     commands.spawn((
-        AudioPlayer(video_stream.clone()), 
-        PlaybackSettings { mode: PlaybackMode::Once, paused: true, ..default() }
+        AudioPlayer(video_stream.clone()),
+        PlaybackSettings {
+            mode: PlaybackMode::Once,
+            paused: true,
+            ..default()
+        },
     ));
     commands.spawn((
         // keep transform synced with screen transform
