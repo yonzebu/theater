@@ -503,6 +503,7 @@ impl Iterator for VideoAudioSource {
                 if new_current.samples.len() > 0 {
                     let sample = new_current.samples[0];
                     self.current = Some(new_current);
+                    self.current_index += 1;
                     return Some(sample);
                 }
             }
