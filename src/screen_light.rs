@@ -90,7 +90,7 @@ pub struct ExtractedScreenLights(EntityHashMap<RenderEntity>);
 
 #[derive(Resource)]
 pub struct ViewScreenLightShadowTexture {
-    texture: CachedTexture,
+    _texture: CachedTexture,
     texture_view: TextureView,
 }
 
@@ -297,6 +297,7 @@ fn update_screen_light_materials<M: Material>(
     }
 }
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn update_screen_light_frusta(
     mut views: Query<
         (&GlobalTransform, &Projection, &mut Frustum),
@@ -327,6 +328,7 @@ fn shrink_entities(visible_entities: &mut Vec<Entity>) {
     visible_entities.shrink_to(reserved);
 }
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn check_screen_light_mesh_visibility(
     mut screen_lights: Query<
         (&Frustum, &mut VisibleMeshEntities, Option<&RenderLayers>),
@@ -430,6 +432,7 @@ fn create_render_visible_mesh_entities(
     }
 }
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn extract_screen_lights(
     mut commands: Commands,
     screen_lights: Extract<
@@ -458,7 +461,7 @@ fn extract_screen_lights(
         screen_light,
         visible_entities,
         transform,
-        view_visibility,
+        _view_visibility,
         frustum,
         projection,
     ) in screen_lights.iter()
@@ -506,7 +509,7 @@ fn extract_screen_lights(
     commands.insert_or_spawn_batch(lights_to_spawn);
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn prepare_screen_lights(
     mut commands: Commands,
     mut texture_cache: ResMut<TextureCache>,
@@ -595,7 +598,7 @@ pub fn prepare_screen_lights(
             view_light_entities.lights.push(view_light_entity);
         }
         commands.insert_resource(ViewScreenLightShadowTexture {
-            texture: shadow_map,
+            _texture: shadow_map,
             texture_view: shadow_map_view,
         });
     }
@@ -629,7 +632,7 @@ fn queue_screen_light_shadows<M: Material>(
 ) where
     M::Data: PartialEq + Eq + Hash + Clone,
 {
-    for (view_entity, view_lights) in &view_lights {
+    for (_view_entity, view_lights) in &view_lights {
         let draw_shadow_mesh = shadow_draw_functions.read().id::<DrawPrepass<M>>();
         for view_light_entity in view_lights.lights.iter().copied() {
             let Ok(light_entity) = screen_light_entities.get(view_light_entity) else {

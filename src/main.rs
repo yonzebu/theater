@@ -1,3 +1,4 @@
+#![allow(unused, clippy::type_complexity)]
 use bevy::asset::UntypedAssetId;
 use bevy::audio::PlaybackMode;
 use bevy::ecs::component::ComponentId;

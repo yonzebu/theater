@@ -34,7 +34,7 @@ pub enum AnswerBlock {
 impl AnswerBlock {
     pub fn get_answer(&self, answer: usize) -> Option<&String> {
         match self {
-            Self::Single(s) => (answer == 0).then(|| s),
+            Self::Single(s) => (answer == 0).then_some(s),
             Self::Many(choices) => choices.get(answer).map(|answer| &answer.answer),
         }
     }
@@ -73,7 +73,7 @@ fn till_newline1(input: &str) -> IResult<&str, &str> {
     take_till1(|c| c == '\r' || c == '\n')(input)
 }
 
-fn prompt<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
+fn prompt(lines: &str) -> IResult<&str, &str> {
     delimited(
         line_starter(">"),
         till_newline1.map(str::trim),
@@ -81,7 +81,7 @@ fn prompt<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
     )(lines)
 }
 
-fn answer<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
+fn answer(lines: &str) -> IResult<&str, &str> {
     delimited(
         line_starter("-"),
         till_newline1.map(str::trim),
@@ -89,7 +89,7 @@ fn answer<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
     )(lines)
 }
 
-fn end<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
+fn end(lines: &str) -> IResult<&str, &str> {
     delimited(
         line_starter("!"),
         till_newline1.map(str::trim),
@@ -97,16 +97,16 @@ fn end<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
     )(lines)
 }
 
-fn line<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
+fn line(lines: &str) -> IResult<&str, &str> {
     verify(
         terminated(till_newline1.map(str::trim), Parser::or(line_ending, eof)),
-        |s: &str| s.len() > 0,
+        |s: &str| !s.is_empty(),
     )(lines)
 }
 
-fn empty<'a>(lines: &'a str) -> IResult<&'a str, &'a str> {
+fn empty(lines: &str) -> IResult<&str, &str> {
     verify(terminated(till_newline0, line_ending), |s: &str| {
-        s.trim().len() == 0
+        s.trim().is_empty()
     })(lines)
 }
 
@@ -122,7 +122,7 @@ where
     preceded(fold_many0(to_skip, || (), |_, _| ()), parser)
 }
 
-fn prompt_block<'a>(lines: &'a str) -> IResult<&'a str, ScriptEntry> {
+fn prompt_block(lines: &str) -> IResult<&str, ScriptEntry> {
     let (lines, (prompt, answer_block)) = (tuple((
         skip_while(empty, prompt),
         alt((
@@ -156,11 +156,11 @@ fn prompt_block<'a>(lines: &'a str) -> IResult<&'a str, ScriptEntry> {
     ))
 }
 
-fn line_block<'a>(lines: &'a str) -> IResult<&'a str, ScriptEntry> {
+fn line_block(lines: &str) -> IResult<&str, ScriptEntry> {
     skip_while(empty, line)(lines).map(|(input, line)| (input, ScriptEntry::Line(line.into())))
 }
 
-fn parse_entries<'a>(lines: &'a str) -> IResult<&'a str, Vec<ScriptEntry>> {
+fn parse_entries(lines: &str) -> IResult<&str, Vec<ScriptEntry>> {
     many0(alt((prompt_block, line_block)))(lines)
 }
 
@@ -496,8 +496,8 @@ impl ScriptChoices {
         match trigger.event() {
             RunnerUpdated::HideChoices | RunnerUpdated::Finished | RunnerUpdated::NoScript => {
                 if let Some(mut choices_commands) = commands.get_entity(trigger.entity()) {
-                    if let Some((mut choices_display, children)) =
-                        choices_displays.get_mut(trigger.entity()).ok()
+                    if let Ok((mut choices_display, children)) =
+                        choices_displays.get_mut(trigger.entity())
                     {
                         if !choices_display.displaying_choices {
                             return;
@@ -507,7 +507,8 @@ impl ScriptChoices {
                             .map(|children| children.deref())
                             .unwrap_or(&[])
                             .iter()
-                            .filter_map(|&child| choices.contains(child).then(|| child))
+                            .filter(|&&child| choices.contains(child))
+                            .copied()
                             .collect::<Vec<_>>();
                         choices_commands.remove_children(&to_remove);
                         if let Ok(mut root_visibility) =
@@ -551,7 +552,7 @@ impl ScriptChoices {
                             *root_visibility = Visibility::Inherited;
                         }
                     }
-                    ScriptEntry::Line(_) => return,
+                    ScriptEntry::Line(_) => {}
                 }
             }
         }
@@ -671,12 +672,10 @@ fn update_script_runner_text(
             }
             _ => unreachable!(),
         }
-        if runner.displayed_bytes >= text_len {
-            if !runner.is_line_finished() {
-                runner.finish_line(&text.0);
-                if currently_prompt {
-                    commands.trigger_targets(RunnerUpdated::ShowChoices, runner.choices_display);
-                }
+        if runner.displayed_bytes >= text_len && !runner.is_line_finished() {
+            runner.finish_line(&text.0);
+            if currently_prompt {
+                commands.trigger_targets(RunnerUpdated::ShowChoices, runner.choices_display);
             }
         }
     }

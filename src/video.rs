@@ -3,8 +3,8 @@ use std::{
     marker::PhantomData,
     path::{Path, PathBuf},
     sync::{
-        mpsc::{channel, Receiver, RecvError, Sender, TryRecvError},
-        Arc, Mutex, RwLock,
+        mpsc::{channel, Receiver, Sender, TryRecvError},
+        Arc, Mutex,
     },
 };
 
@@ -12,7 +12,6 @@ use bevy::{
     asset::{AssetLoader, RenderAssetUsages},
     audio::{self, AddAudioSource},
     ecs::system::{lifetimeless::SResMut, StaticSystemParam, SystemParam},
-    log::tracing_subscriber::filter::targets::Iter,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
     tasks::AsyncComputeTaskPool,
@@ -20,12 +19,11 @@ use bevy::{
 use ffmpeg_next::{
     self as ffmpeg, codec, decoder,
     ffi::EAGAIN,
-    format::{context::Input, sample, Pixel, Sample},
+    format::{context::Input, Pixel, Sample},
     frame, media,
     software::scaling,
     Packet, Rational,
 };
-use zerocopy::FromBytes;
 
 struct ScalingContext(scaling::Context);
 // SAFETY: i'm like 90% sure this is fine
@@ -210,10 +208,7 @@ impl VideoDecoder {
                                             |c| decoded.plane::<f64>(c),
                                             decoded.planes(),
                                         )
-                                        .map(|&s| {
-                                            let s: i64 = zerocopy::transmute!(s);
-                                            s as f32 / i64::MAX as f32
-                                        }),
+                                        .map(|&s| s.to_bits() as i64 as f32 / i64::MAX as f32),
                                     );
                                 }
                                 Sample::F32(_) => {
@@ -390,10 +385,6 @@ impl VideoStream {
         })
     }
 
-    pub fn is_finished(&self) -> Option<bool> {
-        self.decoder.as_ref().map(|decoder| decoder.finished)
-    }
-
     // get new frames
     fn update(
         &mut self,
@@ -439,10 +430,8 @@ impl VideoStream {
                 // no need to decode more frames yet
                 self.decoder = Some(decoder);
             }
-        } else {
-            if let Ok(decoder) = self.recv_decoder.get_mut().unwrap().try_recv() {
-                self.decoder = Some(decoder);
-            }
+        } else if let Ok(decoder) = self.recv_decoder.get_mut().unwrap().try_recv() {
+            self.decoder = Some(decoder);
         }
 
         while let Ok(frame) = self.recv_frames.get_mut().unwrap().try_recv() {
@@ -492,11 +481,13 @@ impl Iterator for VideoAudioSource {
     type Item = f32;
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if let Some(current) = self.current.as_ref() {
-                if let Some(&sample) = current.samples.get(self.current_index) {
-                    self.current_index += 1;
-                    return Some(sample);
-                }
+            if let Some(&sample) = self
+                .current
+                .as_ref()
+                .and_then(|current| current.samples.get(self.current_index))
+            {
+                self.current_index += 1;
+                return Some(sample);
             }
             self.current_index = 0;
             while let Some(new_current) = self.buffered_audio.pop_front() {
@@ -734,7 +725,7 @@ fn update_receivers_from_players<R: ReceiveFrame + Component>(
         if let Some(video_stream) = video_streams.get_mut(player.0.id()) {
             if let Some(frame) = video_stream
                 .buffered_frames
-                .get(0)
+                .front()
                 .map(|frame| frame.image.clone())
             {
                 if receiver.should_receive(&frame, &param) {

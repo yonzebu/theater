@@ -1,3 +1,4 @@
+#![allow(unused)]
 use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     math::vec3,
