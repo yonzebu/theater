@@ -1,4 +1,5 @@
 use bevy::asset::UntypedAssetId;
+use bevy::audio::PlaybackMode;
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::world::DeferredWorld;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, NotShadowCaster};
@@ -84,7 +85,11 @@ fn setup(
 ) {
     commands.spawn((Camera3d::default(), Transform::from_xyz(0., 2., 5.)));
     // commands.spawn((PointLight::default(), Transform::from_xyz(0., 2., -9.)));
-    let video_stream = assets.load::<VideoStream>("nonfinal/show.mp4");
+    let video_stream = assets.load::<VideoStream>("nonfinal/testshow.mp4");
+    commands.spawn((
+        AudioPlayer(video_stream.clone()), 
+        PlaybackSettings { mode: PlaybackMode::Once, paused: true, ..default() }
+    ));
     commands.spawn((
         // keep transform synced with screen transform
         Transform::from_xyz(0., 2.5, SCREEN_LIGHT_POS).looking_to(Dir3::Z, Dir3::Y),
@@ -157,8 +162,8 @@ fn setup(
         NotShadowCaster,
     ));
 
-    let me_image = assets.load("nonfinal/maybem.png");
-    let me_mesh = assets.load("nonfinal/me.glb#Mesh0/Primitive0");
+    let me_image = assets.load("me.png");
+    let me_mesh = assets.load("me.glb#Mesh0/Primitive0");
     commands.spawn((
         Mesh3d(me_mesh.clone()),
         MeshMaterial3d(papers.add(ExtendedMaterial {
@@ -170,8 +175,8 @@ fn setup(
             .with_scale(Vec3::ONE * 0.5),
         WaitingForLoads,
     ));
-    let you_image = assets.load("nonfinal/maybey.png");
-    let you_mesh = assets.load("nonfinal/you.glb#Mesh0/Primitive0");
+    let you_image = assets.load("you.png");
+    let you_mesh = assets.load("you.glb#Mesh0/Primitive0");
     commands.spawn((
         Mesh3d(you_mesh.clone()),
         MeshMaterial3d(papers.add(ExtendedMaterial {
@@ -185,7 +190,7 @@ fn setup(
     ));
 
     // chairs
-    let chair: Handle<Scene> = assets.load("nonfinal/chair2mat.glb#Scene0");
+    let chair: Handle<Scene> = assets.load("chair.glb#Scene0");
     for i in 0i32..CHAIR_COLS {
         for j in 0i32..CHAIR_ROWS {
             let x = 2. * (i - 2) as f32;
@@ -361,15 +366,22 @@ fn update_chair_materials(
 }
 
 fn update_video_player(
-    screens: Query<&VideoPlayer, With<Screen>>,
+    audio_players: Query<(&AudioPlayer<VideoStream>, &AudioSink)>,
     mut video_streams: ResMut<Assets<VideoStream>>,
     keyboard: Res<ButtonInput<KeyCode>>,
 ) {
-    for video_player in screens.iter() {
-        if keyboard.just_pressed(KeyCode::KeyV) {
-            if let Some(video_stream) = video_streams.get_mut(video_player.0.id()) {
-                video_stream.playing = !video_stream.playing;
-                println!("video playing = {}", video_stream.playing);
+    if keyboard.just_pressed(KeyCode::KeyV) {
+        for (_, video_stream) in video_streams.iter_mut() {
+            video_stream.playing = !video_stream.playing;
+            println!("video playing = {}", video_stream.playing);
+        }
+    }
+    for (audio_player, audio_sink) in audio_players.iter() {
+        if let Some(video_stream) = video_streams.get(audio_player.0.id()) {
+            if video_stream.playing {
+                audio_sink.play();
+            } else {
+                audio_sink.pause();
             }
         }
     }

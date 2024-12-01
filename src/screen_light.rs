@@ -55,14 +55,18 @@ pub struct ScreenLight {
 }
 
 impl ReceiveFrame for ScreenLight {
-    type SystemParam = ();
-    fn should_receive(&self, id: impl Into<AssetId<Image>>) -> bool {
-        self.image.id() != id.into()
+    type Param = ();
+    fn should_receive(
+        &self,
+        frame: &Handle<Image>,
+        _: &<Self::Param as bevy::ecs::system::SystemParam>::Item<'_, '_>,
+    ) -> bool {
+        self.image.id() != frame.id()
     }
     fn receive_frame(
         &mut self,
         frame: Handle<Image>,
-        _: &mut <Self::SystemParam as bevy::ecs::system::SystemParam>::Item<'_, '_>,
+        _: &mut <Self::Param as bevy::ecs::system::SystemParam>::Item<'_, '_>,
     ) {
         self.image = frame;
     }
