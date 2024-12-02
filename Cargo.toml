@@ -10,7 +10,7 @@ zerocopy = "0.8.11"
 
 
 [dependencies.bevy]
-version = "0.15.0-rc.3"
+version = "0.15.0"
 # features = [ "default", "dynamic_linking" ]
 features = [ "default" ]
 
