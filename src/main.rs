@@ -85,7 +85,7 @@ fn setup(
     assets: Res<AssetServer>,
 ) {
     commands.spawn((Camera3d::default(), Transform::from_xyz(0., 2., 5.)));
-    // commands.spawn((PointLight::default(), Transform::from_xyz(0., 2., -9.)));
+    commands.spawn((PointLight::default(), Transform::from_xyz(0., 0., -9.)));
     let video_stream = assets.load::<VideoStream>("nonfinal/testshow.mp4");
     // commands.spawn((
     //     AudioPlayer(video_stream.clone()),

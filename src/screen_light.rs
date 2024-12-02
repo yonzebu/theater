@@ -1,4 +1,9 @@
-//! this is held together by glue and toothpicks
+//! This is held together by glue and toothpicks.
+//! 
+//! It's not really intended to be used outside of this project, and has a lot of problems that were
+//! solved with the most convenient thing at the time and never got changed to something "better"
+//! because it was never needed. There are several rendering features that will probably break this
+//! that haven't been tested at all (e.g. deferred, lightmaps, custom materials)
 
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -9,7 +14,7 @@ use bevy::ecs::entity::EntityHashMap;
 use bevy::ecs::system::lifetimeless::{Read, SQuery, SRes};
 use bevy::ecs::system::SystemParamItem;
 use bevy::pbr::{
-    prepare_lights, queue_material_meshes, DrawPrepass, ExtendedMaterial, LightViewEntities, MaterialPipeline, MaterialPipelineKey, MeshPipelineKey, NotShadowCaster, PreparedMaterial, PrepassPipeline, PrepassPipelinePlugin, PrepassPlugin, RenderMaterialInstances, RenderMeshInstanceFlags, RenderMeshInstances, RenderVisibleMeshEntities, Shadow, ShadowBinKey, ShadowView, SimulationLightSystems, ViewLightEntities, VisibleMeshEntities
+    prepare_lights, queue_material_meshes, queue_shadows, DrawPrepass, ExtendedMaterial, LightViewEntities, MaterialPipeline, MaterialPipelineKey, MeshPipelineKey, NotShadowCaster, PreparedMaterial, PrepassPipeline, PrepassPipelinePlugin, PrepassPlugin, RenderLightmaps, RenderMaterialInstances, RenderMeshInstanceFlags, RenderMeshInstances, RenderVisibleMeshEntities, Shadow, ShadowBinKey, ShadowView, SimulationLightSystems, ViewLightEntities, VisibleMeshEntities
 };
 use bevy::render::camera::CameraProjection;
 use bevy::render::mesh::RenderMesh;
@@ -54,6 +59,7 @@ pub struct ScreenLight {
 
 impl ReceiveFrame for ScreenLight {
     type Param = ();
+
     fn should_receive(
         &self,
         frame: &Handle<Image>,
@@ -61,6 +67,7 @@ impl ReceiveFrame for ScreenLight {
     ) -> bool {
         self.image.id() != frame.id()
     }
+
     fn receive_frame(
         &mut self,
         frame: Handle<Image>,
@@ -110,6 +117,7 @@ impl AsBindGroup for ScreenLightExtension {
     fn label() -> Option<&'static str> {
         Some("screen light extension")
     }
+
     fn unprepared_bind_group(
         &self,
         _layout: &BindGroupLayout,
@@ -155,6 +163,7 @@ impl AsBindGroup for ScreenLightExtension {
             data: (),
         })
     }
+
     fn bind_group_layout_entries(_render_device: &RenderDevice) -> Vec<BindGroupLayoutEntry>
     where
         Self: Sized,
@@ -186,10 +195,12 @@ type Extended<M> = ExtendedMaterial<M, ScreenLightExtension>;
 // this should not be pub bc certain things become harder to reason about
 #[derive(Clone, Asset, AsBindGroup, TypePath)]
 struct ScreenLightPrepassExtension {}
+
 impl MaterialExtension for ScreenLightPrepassExtension {}
 
 type PrepassExt<M> = ExtendedMaterial<M, ScreenLightPrepassExtension>;
 
+/// I don't think this works with deferred rendering, I haven't tested and don't care right now.
 pub struct ScreenLightPlugin;
 
 impl Plugin for ScreenLightPlugin {
@@ -213,9 +224,6 @@ impl Plugin for ScreenLightPlugin {
                         .after(VisibilitySystems::CalculateBounds)
                         .after(TransformSystem::TransformPropagate)
                         .after(SimulationLightSystems::UpdateLightFrusta)
-                        // NOTE: This MUST be scheduled AFTER the core renderer visibility check
-                        // because that resets entity `ViewVisibility` for the first view
-                        // which would override any results from this otherwise
                         .after(VisibilitySystems::CheckVisibility),
                 ),
             );
@@ -266,11 +274,77 @@ impl Plugin for ScreenLightPlugin {
     }
 }
 
+/// What it says on the tin. Mostly duplicated from bevy's renderer, but with shadows always on and
+/// without adding any other passes.
+struct MaterialPluginOnlyShadow<M: Material> {
+    prepass_enabled: bool,
+    _marker: PhantomData<M>
+}
+
+impl<M: Material> Default for MaterialPluginOnlyShadow<M> {
+    fn default() -> Self {
+        MaterialPluginOnlyShadow {
+            prepass_enabled: true,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<M: Material> Plugin for MaterialPluginOnlyShadow<M> 
+where 
+    M::Data: Clone + Eq + Hash
+{
+    fn build(&self, app: &mut App) {
+        app.init_asset::<M>()
+            .register_type::<MeshMaterial3d<M>>()
+            .add_plugins(RenderAssetPlugin::<PreparedMaterial<M>>::default());
+
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app
+                .init_resource::<DrawFunctions<Shadow>>()
+                .init_resource::<RenderMaterialInstances<M>>()
+                .add_render_command::<Shadow, DrawPrepass<M>>()
+                .init_resource::<SpecializedMeshPipelines<MaterialPipeline<M>>>()
+                .add_systems(ExtractSchedule, extract_mesh_materials::<M>);
+
+            render_app.add_systems(
+                Render,
+                queue_shadows::<M>
+                    .in_set(RenderSet::QueueMeshes)
+                    .after(prepare_assets::<PreparedMaterial<M>>),
+            );
+        }
+
+        app.add_plugins(PrepassPipelinePlugin::<M>::default());
+
+        if self.prepass_enabled {
+            app.add_plugins(PrepassPlugin::<M>::default());
+        }
+    }
+
+    fn finish(&self, app: &mut App) {
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app.init_resource::<MaterialPipeline<M>>();
+        }
+    }
+}
+
 /// Adds the necessary stuff for using [`ScreenLightExtension`] with a given material. Note that
 /// you must also add [`ScreenLightPlugin`], and that [`ScreenLightPlugin`] also adds an instance
 /// of this plugin for [`StandardMaterial`], so you don't need to manually add it.
-#[derive(Default)]
-pub struct ScreenLightExtensionPlugin<M: Material>(PhantomData<M>);
+pub struct ScreenLightExtensionPlugin<M: Material> {
+    // pub prepass_enabled: bool,
+    pub _marker: PhantomData<M>
+}
+
+impl<M: Material> Default for ScreenLightExtensionPlugin<M> {
+    fn default() -> Self {
+        ScreenLightExtensionPlugin {
+            // prepass_enabled: true,
+            _marker: PhantomData
+        }
+    }
+}
 
 impl<M: Material> Plugin for ScreenLightExtensionPlugin<M>
 where
@@ -286,15 +360,16 @@ where
                     update_screen_light_prepass_extensions::<M>
                 ),
             )
-            .init_asset::<PrepassExt<M>>()
-            .register_type::<MeshMaterial3d<PrepassExt<M>>>()
             .add_plugins((
-                RenderAssetPlugin::<PreparedMaterial<PrepassExt<M>>>::default(), 
                 MaterialPlugin::<Extended<M>> {
                     shadows_enabled: false,
                     prepass_enabled: false,
                     _marker: PhantomData,
                 },
+                MaterialPluginOnlyShadow::<PrepassExt<M>> {
+                    prepass_enabled: false,
+                    _marker: PhantomData
+                }
             ))
             .add_observer(on_remove_screen_light_extension::<M>);
 
@@ -302,47 +377,26 @@ where
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };
-
-        render_app
-            .init_resource::<DrawFunctions<Shadow>>()
-            .init_resource::<RenderMaterialInstances<PrepassExt<M>>>()
-            .add_render_command::<Shadow, DrawPrepass<PrepassExt<M>>>()
-            .init_resource::<SpecializedMeshPipelines<MaterialPipeline<PrepassExt<M>>>>()
-            .add_systems(ExtractSchedule, extract_mesh_materials::<PrepassExt<M>>);
         
         render_app.add_systems(
             Render,
             (
-                // queue_screen_light_shadows::<M>
-                //     .in_set(RenderSet::QueueMeshes)
-                //     .after(prepare_assets::<PreparedMaterial<M>>),
                 queue_screen_light_shadows::<PrepassExt<M>>
                     .in_set(RenderSet::QueueMeshes)
                     .after(prepare_assets::<PreparedMaterial<PrepassExt<M>>>),
             ),
         );
-
-        app.add_plugins((
-            PrepassPipelinePlugin::<PrepassExt<M>>::default(),
-            PrepassPlugin::<PrepassExt<M>>::default()
-        ));
-    }
-
-    fn finish(&self, app: &mut App) {
-        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
-            render_app.init_resource::<MaterialPipeline<PrepassExt<M>>>();
-        }
     }
 }
 
 #[derive(Resource, Deref, DerefMut)]
 struct ExtendedToPrepass<M: Material>(HashMap<AssetId<Extended<M>>, AssetId<PrepassExt<M>>>);
+
 impl<M: Material> Default for ExtendedToPrepass<M> {
     fn default() -> Self {
         ExtendedToPrepass(HashMap::default())
     }
 }
-
 
 #[derive(Component)]
 struct WithPrepassExt<M: Material> {
@@ -419,6 +473,7 @@ fn update_screen_light_prepass_extensions<M: Material>(
         }
     }
 }
+
 fn on_remove_screen_light_extension<M: Material>(
     trigger: Trigger<OnRemove, MeshMaterial3d<Extended<M>>>,
     mut commands: Commands,
@@ -650,13 +705,6 @@ fn extract_screen_lights(
         };
         extracted_lights.insert(main_entity, render_entity.into());
 
-        // let view_backward = transform.back();
-        // let near = match projection {
-        //     Projection::Orthographic(ortho) => ortho.near,
-        //     Projection::Perspective(perspective) => perspective.near,
-        // };
-        // let translate = GlobalTransform::from(Transform::from_translation(view_backward * near));
-
         let render_visible_entities =
             create_render_visible_mesh_entities(&mut commands, &mapper, visible_entities);
 
@@ -790,7 +838,7 @@ pub fn prepare_screen_lights(
     // }
 }
 
-// this can't rely on [`queue_shadows`] bc this checks for kind of light
+// this can't rely on [`queue_shadows`] bc that checks for kind of light and this is a custom light it's not looking for
 #[allow(clippy::too_many_arguments)]
 fn queue_screen_light_shadows<M: Material>(
     shadow_draw_functions: Res<DrawFunctions<Shadow>>,
@@ -845,15 +893,6 @@ fn queue_screen_light_shadows<M: Material>(
 
                 let mut mesh_key =
                     light_key | MeshPipelineKey::from_bits_retain(mesh.key_bits.bits());
-
-                // // Even though we don't use the lightmap in the shadow map, the
-                // // `SetMeshBindGroup` render command will bind the data for it. So
-                // // we need to include the appropriate flag in the mesh pipeline key
-                // // to ensure that the necessary bind group layout entries are
-                // // present.
-                // if render_lightmaps.render_lightmaps.contains_key(&main_entity) {
-                //     mesh_key |= MeshPipelineKey::LIGHTMAPPED;
-                // }
 
                 mesh_key |= match material.properties.alpha_mode {
                     AlphaMode::Mask(_)
