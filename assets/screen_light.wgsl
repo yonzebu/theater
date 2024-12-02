@@ -57,7 +57,9 @@ struct ScreenLightUniform {
     clip_from_world: mat4x4<f32>,
 }
 
+#ifndef PREPASS_FRAGMENT
 @group(2) @binding(96) var<uniform> screen_light: ScreenLightUniform;
+#endif
 @group(2) @binding(97) var shadow_map: texture_depth_2d;
 @group(2) @binding(98) var screen_image: texture_2d<f32>;
 @group(2) @binding(99) var screen_sampler: sampler;
@@ -68,27 +70,37 @@ fn fragment(
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
 
-    // generate a PbrInput struct from the StandardMaterial bindings
-    var pbr_input = pbr_input_from_standard_material(in, is_front);
+//     // generate a PbrInput struct from the StandardMaterial bindings
+//     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
-    pbr_input.material.base_color.a = 1.0;
+//     pbr_input.material.base_color.a = 1.0;
 
-    // alpha discard
-    pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
+//     // alpha discard
+//     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
 
-#ifdef PREPASS_PIPELINE
-    let out = deferred_output(in, pbr_input);
-#else
+// #ifdef PREPASS_PIPELINE
+//     let out = deferred_output(in, pbr_input);
+// #else
+//     var out: FragmentOutput;
+//     // apply lighting
+//     out.color = apply_pbr_lighting(pbr_input);
+
+//     // TODO: add screen light lighting
+
+//     // apply in-shader post processing (fog, alpha-premultiply, and also tonemapping, debanding if the camera is non-hdr)
+//     // note this does not include fullscreen postprocessing effects like bloom.
+//     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+
+// #endif
+
     var out: FragmentOutput;
-    // apply lighting
-    out.color = apply_pbr_lighting(pbr_input);
-
-    // TODO: add screen light lighting
-
-    // apply in-shader post processing (fog, alpha-premultiply, and also tonemapping, debanding if the camera is non-hdr)
-    // note this does not include fullscreen postprocessing effects like bloom.
-    out.color = main_pass_post_lighting_processing(pbr_input, out.color);
-
+    let clip_pos = screen_light.clip_from_world * in.world_position;
+    let ndc_pos = clip_pos.xyz / clip_pos.w;
+    let shadow_uv = ndc_pos.xy * vec2(0.5, -0.5) + vec2(0.5);
+#ifndef PREPASS_FRAGMENT
+    out.color = vec4(vec3(textureSample(shadow_map, screen_sampler, shadow_uv)), 1.0);
+#else
+    out.color.a = 1.0;
 #endif
     return out;
 }

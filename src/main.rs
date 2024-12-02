@@ -87,14 +87,14 @@ fn setup(
     commands.spawn((Camera3d::default(), Transform::from_xyz(0., 2., 5.)));
     // commands.spawn((PointLight::default(), Transform::from_xyz(0., 2., -9.)));
     let video_stream = assets.load::<VideoStream>("nonfinal/testshow.mp4");
-    commands.spawn((
-        AudioPlayer(video_stream.clone()),
-        PlaybackSettings {
-            mode: PlaybackMode::Once,
-            paused: true,
-            ..default()
-        },
-    ));
+    // commands.spawn((
+    //     AudioPlayer(video_stream.clone()),
+    //     PlaybackSettings {
+    //         mode: PlaybackMode::Once,
+    //         paused: true,
+    //         ..default()
+    //     },
+    // ));
     commands.spawn((
         // keep transform synced with screen transform
         Transform::from_xyz(0., 2.5, SCREEN_LIGHT_POS).looking_to(Dir3::Z, Dir3::Y),
@@ -363,9 +363,10 @@ fn update_chair_materials(
                     extension: ScreenLightExtension {
                         light: screen_light,
                     },
-                })));
-            old_material.base_color.set_alpha(0.);
-            old_material.alpha_mode = AlphaMode::Mask(1.0);
+                })))
+                .remove::<MeshMaterial3d<StandardMaterial>>();
+            // old_material.base_color.set_alpha(0.);
+            // old_material.alpha_mode = AlphaMode::Mask(1.0);
         }
     }
 }
@@ -430,14 +431,12 @@ fn main() {
         .add_plugins((
             DefaultPlugins,
             MaterialPlugin::<ExtendedMaterial<StandardMaterial, Paper>>::default(),
-            MaterialPlugin::<ExtendedMaterial<StandardMaterial, ScreenLightExtension>>::default(),
             DebugPlugin,
             VideoPlugin,
             VideoPlayerPlugin::<MeshMaterial3d<StandardMaterial>>::default(),
             VideoPlayerPlugin::<ScreenLight>::default(),
             ScriptPlugin,
             ScreenLightPlugin,
-            ScreenLightExtensionPlugin::<StandardMaterial>::default(),
         ))
         .add_systems(Startup, setup)
         .add_systems(

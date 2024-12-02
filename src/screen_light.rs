@@ -3,21 +3,19 @@
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::DerefMut;
+use std::sync::Arc;
 
 use bevy::ecs::entity::EntityHashMap;
 use bevy::ecs::system::lifetimeless::{Read, SQuery, SRes};
 use bevy::ecs::system::SystemParamItem;
 use bevy::pbr::{
-    prepare_lights, DrawPrepass, ExtendedMaterial, LightViewEntities, MaterialPipelineKey,
-    MeshPipelineKey, NotShadowCaster, PreparedMaterial, PrepassPipeline, RenderMaterialInstances,
-    RenderMeshInstanceFlags, RenderMeshInstances, RenderVisibleMeshEntities, Shadow, ShadowBinKey,
-    ShadowView, SimulationLightSystems, ViewLightEntities, VisibleMeshEntities,
+    prepare_lights, queue_material_meshes, DrawPrepass, ExtendedMaterial, LightViewEntities, MaterialPipeline, MaterialPipelineKey, MeshPipelineKey, NotShadowCaster, PreparedMaterial, PrepassPipeline, PrepassPipelinePlugin, PrepassPlugin, RenderMaterialInstances, RenderMeshInstanceFlags, RenderMeshInstances, RenderVisibleMeshEntities, Shadow, ShadowBinKey, ShadowView, SimulationLightSystems, ViewLightEntities, VisibleMeshEntities
 };
 use bevy::render::camera::CameraProjection;
 use bevy::render::mesh::RenderMesh;
 use bevy::render::primitives::{Aabb, Frustum};
-use bevy::render::render_asset::{prepare_assets, RenderAssets};
-use bevy::render::render_phase::{BinnedRenderPhaseType, DrawFunctions, ViewBinnedRenderPhases};
+use bevy::render::render_asset::{prepare_assets, RenderAssetPlugin, RenderAssets};
+use bevy::render::render_phase::{AddRenderCommand, BinnedRenderPhaseType, DrawFunctions, ViewBinnedRenderPhases};
 use bevy::render::render_resource::binding_types::{
     sampler, texture_2d, texture_depth_2d, uniform_buffer,
 };
@@ -37,7 +35,7 @@ use bevy::render::view::{
     VisibilitySystems, VisibleEntityRanges,
 };
 use bevy::render::{Extract, Render, RenderApp, RenderSet};
-use bevy::utils::Parallel;
+use bevy::utils::{HashMap, Parallel};
 use bevy::{pbr::MaterialExtension, prelude::*};
 
 use crate::video::ReceiveFrame;
@@ -183,11 +181,24 @@ impl MaterialExtension for ScreenLightExtension {
     }
 }
 
+type Extended<M> = ExtendedMaterial<M, ScreenLightExtension>;
+
+// this should not be pub bc certain things become harder to reason about
+#[derive(Clone, Asset, AsBindGroup, TypePath)]
+struct ScreenLightPrepassExtension {}
+impl MaterialExtension for ScreenLightPrepassExtension {}
+
+type PrepassExt<M> = ExtendedMaterial<M, ScreenLightPrepassExtension>;
+
 pub struct ScreenLightPlugin;
 
 impl Plugin for ScreenLightPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(SyncComponentPlugin::<ScreenLight>::default())
+        app
+            .add_plugins((
+                SyncComponentPlugin::<ScreenLight>::default(), 
+                ScreenLightExtensionPlugin::<StandardMaterial>::default()
+            ))
             .add_systems(
                 PostUpdate,
                 (
@@ -255,6 +266,9 @@ impl Plugin for ScreenLightPlugin {
     }
 }
 
+/// Adds the necessary stuff for using [`ScreenLightExtension`] with a given material. Note that
+/// you must also add [`ScreenLightPlugin`], and that [`ScreenLightPlugin`] also adds an instance
+/// of this plugin for [`StandardMaterial`], so you don't need to manually add it.
 #[derive(Default)]
 pub struct ScreenLightExtensionPlugin<M: Material>(PhantomData<M>);
 
@@ -263,34 +277,196 @@ where
     M::Data: PartialEq + Eq + Hash + Clone,
 {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            PostUpdate,
-            update_screen_light_materials::<M>.after(update_screen_light_frusta),
-        );
+        app
+            .init_resource::<ExtendedToPrepass<M>>()
+            .add_systems(
+                PostUpdate,
+                (
+                    update_screen_light_materials::<M>.after(update_screen_light_frusta),
+                    update_screen_light_prepass_extensions::<M>
+                ),
+            )
+            .init_asset::<PrepassExt<M>>()
+            .register_type::<MeshMaterial3d<PrepassExt<M>>>()
+            .add_plugins((
+                RenderAssetPlugin::<PreparedMaterial<PrepassExt<M>>>::default(), 
+                MaterialPlugin::<Extended<M>> {
+                    shadows_enabled: false,
+                    prepass_enabled: false,
+                    _marker: PhantomData,
+                },
+            ))
+            .add_observer(on_remove_screen_light_extension::<M>);
+
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };
+
+        render_app
+            .init_resource::<DrawFunctions<Shadow>>()
+            .init_resource::<RenderMaterialInstances<PrepassExt<M>>>()
+            .add_render_command::<Shadow, DrawPrepass<PrepassExt<M>>>()
+            .init_resource::<SpecializedMeshPipelines<MaterialPipeline<PrepassExt<M>>>>()
+            .add_systems(ExtractSchedule, extract_mesh_materials::<PrepassExt<M>>);
+        
         render_app.add_systems(
             Render,
             (
-                queue_screen_light_shadows::<M>
-                    .in_set(RenderSet::QueueMeshes)
-                    .after(prepare_assets::<PreparedMaterial<M>>),
-                // queue_screen_light_shadows::<ExtendedMaterial<M, ScreenLightExtension>>
+                // queue_screen_light_shadows::<M>
                 //     .in_set(RenderSet::QueueMeshes)
-                //     .after(prepare_assets::<PreparedMaterial<ExtendedMaterial<M, ScreenLightExtension>>>),
+                //     .after(prepare_assets::<PreparedMaterial<M>>),
+                queue_screen_light_shadows::<PrepassExt<M>>
+                    .in_set(RenderSet::QueueMeshes)
+                    .after(prepare_assets::<PreparedMaterial<PrepassExt<M>>>),
             ),
         );
+
+        app.add_plugins((
+            PrepassPipelinePlugin::<PrepassExt<M>>::default(),
+            PrepassPlugin::<PrepassExt<M>>::default()
+        ));
+    }
+
+    fn finish(&self, app: &mut App) {
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app.init_resource::<MaterialPipeline<PrepassExt<M>>>();
+        }
+    }
+}
+
+#[derive(Resource, Deref, DerefMut)]
+struct ExtendedToPrepass<M: Material>(HashMap<AssetId<Extended<M>>, AssetId<PrepassExt<M>>>);
+impl<M: Material> Default for ExtendedToPrepass<M> {
+    fn default() -> Self {
+        ExtendedToPrepass(HashMap::default())
+    }
+}
+
+
+#[derive(Component)]
+struct WithPrepassExt<M: Material> {
+    old_material: Handle<Extended<M>>,
+}
+
+fn update_screen_light_prepass_extensions<M: Material>(
+    mut commands: Commands,
+    without_prepass: Query<(Entity, &MeshMaterial3d<Extended<M>>), Without<MeshMaterial3d<PrepassExt<M>>>>,
+    mut changed: Query<
+        (&MeshMaterial3d<Extended<M>>, &mut MeshMaterial3d<PrepassExt<M>>, &mut WithPrepassExt<M>), 
+        Changed<MeshMaterial3d<Extended<M>>>
+    >,
+    materials: Res<Assets<Extended<M>>>,
+    mut prepass_materials: ResMut<Assets<PrepassExt<M>>>,
+    mut extended_to_prepass: ResMut<ExtendedToPrepass<M>>,
+) {
+    for (entity, material) in without_prepass.iter() {
+        if let Some(&prepass_id) = extended_to_prepass.get(&material.id()) {
+            if let Some(prepass_handle) = prepass_materials.get_strong_handle(prepass_id) {
+                commands.entity(entity).insert((
+                    MeshMaterial3d(prepass_handle), 
+                    WithPrepassExt { old_material: material.0.clone() }
+                ));
+                continue;
+            } else {
+                // clearly it's not a valid id anymore, so we just create a new prepass extension
+                extended_to_prepass.remove(&material.id());
+            }
+        }
+        if let Some(extended) = materials.get(material.id()) {
+            let prepass_handle = prepass_materials.add(ExtendedMaterial {
+                base: extended.base.clone(),
+                extension: ScreenLightPrepassExtension {}
+            });
+            let prepass_id = prepass_handle.id();
+            commands.entity(entity).insert((
+                MeshMaterial3d(prepass_handle), 
+                WithPrepassExt { old_material: material.0.clone() }
+            ));
+            extended_to_prepass.insert(material.id(), prepass_id);
+        }
+    }
+    
+    for (MeshMaterial3d(new_handle), mut prepass_ext, mut old_material) in changed.iter_mut() {
+        let old_handle = std::mem::replace(&mut old_material.old_material, new_handle.clone());
+        let old_id = old_handle.id();
+        match old_handle {
+            Handle::Strong(strong) => {
+                if Arc::into_inner(strong).is_some() {
+                    extended_to_prepass.remove(&old_id);
+                }
+            }
+            Handle::Weak(id) => {
+                if !materials.contains(id) {
+                    extended_to_prepass.remove(&id);
+                }
+            }
+        }
+        if let Some(&prepass_id) = extended_to_prepass.get(&new_handle.id()) {
+            if let Some(prepass_handle) = prepass_materials.get_strong_handle(prepass_id) {
+                prepass_ext.0 = prepass_handle;
+                continue;
+            } else {
+                extended_to_prepass.remove(&new_handle.id());
+            }
+        }
+        if let Some(new_material) = materials.get(new_handle.id()) {
+            let prepass_handle = prepass_materials.add(ExtendedMaterial {
+                base: new_material.base.clone(),
+                extension: ScreenLightPrepassExtension {},
+            });
+            prepass_ext.0 = prepass_handle;
+        }
+    }
+}
+fn on_remove_screen_light_extension<M: Material>(
+    trigger: Trigger<OnRemove, MeshMaterial3d<Extended<M>>>,
+    mut commands: Commands,
+    mut with_prepass_exts: Query<&mut WithPrepassExt<M>>,
+    mut extended_to_prepass: ResMut<ExtendedToPrepass<M>>,
+    materials: Res<Assets<Extended<M>>>,
+) {
+    if let Some(mut entity_commands) =  commands.get_entity(trigger.entity()) {
+        entity_commands.remove::<(MeshMaterial3d<PrepassExt<M>>, WithPrepassExt<M>)>();
+    }
+    if let Ok(mut with_prepass_ext) = with_prepass_exts.get_mut(trigger.entity()) {
+        let weak = with_prepass_ext.old_material.clone_weak();
+        let old_material = std::mem::replace(&mut with_prepass_ext.old_material, weak);
+        let old_id = old_material.id();
+        match old_material {
+            Handle::Strong(strong) => {
+                if Arc::into_inner(strong).is_some() {
+                    extended_to_prepass.remove(&old_id);
+                }
+            }
+            Handle::Weak(id) => {
+                if !materials.contains(id) {
+                    extended_to_prepass.remove(&id);
+                }
+            }
+        }
+    }
+}
+
+fn extract_mesh_materials<M: Material>(
+    mut material_instances: ResMut<RenderMaterialInstances<M>>,
+    query: Extract<Query<(Entity, &ViewVisibility, &MeshMaterial3d<M>)>>,
+) {
+    material_instances.clear();
+
+    for (entity, view_visibility, material) in &query {
+        if view_visibility.get() {
+            material_instances.insert(entity.into(), material.id());
+        }
     }
 }
 
 fn update_screen_light_materials<M: Material>(
-    screen_lights: Query<Entity, (With<ScreenLight>, Changed<ScreenLight>)>,
-    assets: Res<Assets<ExtendedMaterial<M, ScreenLightExtension>>>,
-    mut asset_events: EventWriter<AssetEvent<ExtendedMaterial<M, ScreenLightExtension>>>,
+    screen_lights: Query<Entity, (With<ScreenLight>, Or<(Changed<ScreenLight>, Changed<Frustum>)>)>,
+    materials: Res<Assets<Extended<M>>>,
+    mut asset_events: EventWriter<AssetEvent<Extended<M>>>,
 ) {
-    for (id, material) in assets.iter() {
+    for (id, material) in materials.iter() {
         if screen_lights.contains(material.extension.light) {
             asset_events.send(AssetEvent::Modified { id });
         }
