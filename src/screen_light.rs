@@ -47,8 +47,10 @@ use crate::video::ReceiveFrame;
 
 #[derive(Default, ShaderType, Clone)]
 pub struct ScreenLightUniform {
-    image_size: UVec4,
     clip_from_world: Mat4,
+    image_size: UVec2,
+    forward_dir: Vec3,
+    light_pos: Vec3,
 }
 
 #[derive(Component)]
@@ -718,8 +720,10 @@ fn extract_screen_lights(
                 ExtractedScreenLight {
                     image: screen_light.image.clone(),
                     uniform: ScreenLightUniform {
-                        image_size: UVec4::from((image.size(), 0, 0)),
                         clip_from_world,
+                        image_size: image.size(),
+                        forward_dir: *transform.forward(),
+                        light_pos: transform.translation(),
                     },
                     clip_from_view,
                     transform: *transform,

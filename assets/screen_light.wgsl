@@ -8,58 +8,74 @@
     forward_io::{Vertex, VertexOutput, FragmentOutput},
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
 }
-#endif
+#endif // PREPASS_PIPELINE
 #import bevy_pbr::{
     utils::rand_f,
     mesh_bindings::mesh,
     mesh_functions,
     mesh_view_bindings::{globals, point_shadow_textures_comparison_sampler},
+    mesh_view_bindings as view_bindings,
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::alpha_discard,
     view_transformations::position_world_to_clip
 }
 
-// from https://bottosson.github.io/posts/oklab/
-fn linear_srgb_to_oklab(c: vec3<f32>) -> vec3<f32> {
-    let l = 0.4122214708  * c.r + 0.5363325363  * c.g + 0.0514459929  * c.b;
-	let m = 0.2119034982  * c.r + 0.6806995451  * c.g + 0.1073969566  * c.b;
-	let s = 0.0883024619  * c.r + 0.2817188376  * c.g + 0.6299787005  * c.b;
-
-    let l_ = pow(l, 1.0 / 3.0);
-    let m_ = pow(m, 1.0 / 3.0);
-    let s_ = pow(s, 1.0 / 3.0);
-
-    return vec3(
-        0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
-        1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
-        0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_,
+fn sample_shadow_map_hardware(
+    depth_texture: texture_depth_2d, 
+    light_local: vec2<f32>, 
+    depth: f32, 
+    array_index: i32
+) -> f32 {
+    return textureSampleCompare(
+        depth_texture,
+        view_bindings::directional_shadow_textures_comparison_sampler,
+        light_local,
+        depth,
     );
 }
 
-fn oklab_to_linear_srgb(c: vec3<f32>) -> vec3<f32> {
-    let l_ = c.x + 0.3963377774 * c.y + 0.2158037573 * c.z;
-    let m_ = c.x - 0.1055613458 * c.y - 0.0638541728 * c.z;
-    let s_ = c.x - 0.0894841775 * c.y - 1.2914855480 * c.z;
+// these are taken from bevy's default biases for spot lights
+const DEPTH_BIAS: f32 = 0.02;
+// ...except bevy also multiplies the normal bias by some values, so these are precalculated based on approximate expected shadow map size (1920x1080)
+// ...and then futzed with using a fudge factor a little bit
+const NORMAL_BIAS: f32 = 1.8 * 1.4142135 * 0.002 * 2.0;
 
-    let l = l_*l_*l_;
-    let m = m_*m_*m_;
-    let s = s_*s_*s_;
+fn fetch_screen_light_shadow(
+    light_pos: vec3<f32>, 
+    light_dir: vec3<f32>,
+    world_position: vec3<f32>, 
+    surface_normal: vec3<f32>,
+    shadow_map: texture_depth_2d,
+    shadow_sampler: sampler_comparison,
+) -> f32 {
+    let light_to_surface = world_position - light_pos;
+    let distance_to_light = dot(light_dir, light_to_surface);
 
-    return vec3(
-		4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
-		-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
-		-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,
-    );
+    let offset_position =
+        world_position
+        + (DEPTH_BIAS * normalize(light_to_surface))
+        + (surface_normal * NORMAL_BIAS) * distance_to_light;
+    let clip_pos = screen_light.clip_from_world * vec4(offset_position, 1.0);
+    let ndc_pos = clip_pos.xyz / clip_pos.w;
+    let shadow_uv = ndc_pos.xy * vec2(0.5, -0.5) + vec2(0.5);
+
+    // not sure if i should use soft shadows or not
+    // return sample_shadow_map_pcss(
+    //     shadow_uv, depth, array_index, SPOT_SHADOW_TEXEL_SIZE, (*light).soft_shadow_size);
+
+    // return sample_shadow_map(shadow_uv, depth, array_index, SPOT_SHADOW_TEXEL_SIZE);
+
+    return textureSampleCompare(shadow_map, shadow_sampler, shadow_uv, ndc_pos.z);
 }
 
 struct ScreenLightUniform {
-    image_size: vec4<u32>,
     clip_from_world: mat4x4<f32>,
+    image_size: vec2<u32>,
+    forward_dir: vec3<f32>,
+    light_pos: vec3<f32>,
 }
 
-#ifndef PREPASS_FRAGMENT
 @group(2) @binding(96) var<uniform> screen_light: ScreenLightUniform;
-#endif
 @group(2) @binding(97) var shadow_map: texture_depth_2d;
 @group(2) @binding(98) var screen_image: texture_2d<f32>;
 @group(2) @binding(99) var screen_sampler: sampler;
@@ -93,14 +109,17 @@ fn fragment(
 
 // #endif
 
+
+
     var out: FragmentOutput;
-    let clip_pos = screen_light.clip_from_world * in.world_position;
-    let ndc_pos = clip_pos.xyz / clip_pos.w;
-    let shadow_uv = ndc_pos.xy * vec2(0.5, -0.5) + vec2(0.5);
-#ifndef PREPASS_FRAGMENT
-    out.color = vec4(vec3(textureSample(shadow_map, screen_sampler, shadow_uv)), 1.0);
-#else
-    out.color.a = 1.0;
-#endif
+    let shadow = fetch_screen_light_shadow(
+        screen_light.light_pos, 
+        screen_light.forward_dir,
+        in.world_position.xyz,
+        in.world_normal,
+        shadow_map,
+        view_bindings::directional_shadow_textures_comparison_sampler
+    );
+    out.color = vec4(vec3(shadow), 1.0);
     return out;
 }
