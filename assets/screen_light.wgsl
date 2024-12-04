@@ -12,12 +12,16 @@
 #import bevy_pbr::{
     utils::{rand_f, interleaved_gradient_noise},
     utils,
+    lighting,
+    lighting::{LAYER_BASE, LAYER_CLEARCOAT, LightingInput},
     mesh_bindings::mesh,
     mesh_functions,
-    mesh_view_bindings::{globals, point_shadow_textures_comparison_sampler},
+    mesh_view_bindings::globals,
     mesh_view_bindings as view_bindings,
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::alpha_discard,
+    pbr_functions,
+    pbr_types,
     view_transformations::position_world_to_clip
 }
 #import bevy_render::maths::PI
@@ -161,14 +165,14 @@ const DEPTH_BIAS: f32 = 0.02;
 // ...and then futzed with using a fudge factor a little bit
 const NORMAL_BIAS: f32 = 1.8 * 1.4142135 * APPROX_TEXEL_SIZE * 4.0;
 
-fn fetch_screen_light_shadow(
+fn fetch_screen_light_color(
     light_pos: vec3<f32>, 
     light_dir: vec3<f32>,
     world_position: vec3<f32>, 
     surface_normal: vec3<f32>,
     shadow_map: texture_depth_2d,
     shadow_sampler: sampler_comparison,
-) -> f32 {
+) -> vec3<f32> {
     let light_to_surface = world_position - light_pos;
     let distance_to_light = dot(light_dir, light_to_surface);
 
@@ -180,7 +184,208 @@ fn fetch_screen_light_shadow(
     let ndc_pos = clip_pos.xyz / clip_pos.w;
     let shadow_uv = ndc_pos.xy * vec2(0.5, -0.5) + vec2(0.5);
 
-    return sample_shadow_map(shadow_map, shadow_sampler, shadow_uv, ndc_pos.z, APPROX_TEXEL_SIZE);
+    let shadow = sample_shadow_map(shadow_map, shadow_sampler, shadow_uv, ndc_pos.z, APPROX_TEXEL_SIZE);
+    let color = textureSample(screen_image, screen_sampler, shadow_uv).xyz;
+    return shadow * color;
+}
+
+fn screen_light_contrib(
+    light_pos: vec3<f32>, 
+    light_color: vec3<f32>, 
+    input: ptr<function, LightingInput>
+) -> vec3<f32> {
+    // Unpack.
+    let diffuse_color = (*input).diffuse_color;
+    let P = (*input).P;
+    let N = (*input).layers[LAYER_BASE].N;
+    let V = (*input).V;
+
+    let light_to_frag = light_pos - P;
+    let L = normalize(light_to_frag);
+
+    // Base layer
+    
+    // point lights do a thing with changing the specular intensity? but i'm not sure if i need that if i'm not doing range attenuation
+    var specular_derived_input = lighting::derive_lighting_input(N, V, L);
+
+#ifdef STANDARD_MATERIAL_ANISOTROPY
+    let specular_light = lighting::specular_anisotropy(input, &specular_derived_input, L, 1.0);
+#else   // STANDARD_MATERIAL_ANISOTROPY
+    let specular_light = lighting::specular(input, &specular_derived_input, 1.0);
+#endif  // STANDARD_MATERIAL_ANISOTROPY
+
+    // Clearcoat
+
+#ifdef STANDARD_MATERIAL_CLEARCOAT
+    // Unpack.
+    let clearcoat_N = (*input).layers[LAYER_CLEARCOAT].N;
+    let clearcoat_strength = (*input).clearcoat_strength;
+
+    // Perform specular input calculations again for the clearcoat layer. We
+    // can't reuse the above because the clearcoat normal might be different
+    // from the main layer normal.=
+    var clearcoat_specular_derived_input =
+        derive_lighting_input(clearcoat_N, V, L);
+
+    // Calculate the specular light.
+    let Fc_Frc = specular_clearcoat(
+        input,
+        &clearcoat_specular_derived_input,
+        clearcoat_strength,
+        1.0
+    );
+    let inv_Fc = 1.0 - Fc_Frc.r;    // Inverse Fresnel term.
+    let Frc = Fc_Frc.g;             // Clearcoat light.
+#endif  // STANDARD_MATERIAL_CLEARCOAT
+
+    // Diffuse.
+    // Comes after specular since its N⋅L is used in the lighting equation.
+    var derived_input = lighting::derive_lighting_input(N, V, L);
+    let diffuse = diffuse_color * lighting::Fd_Burley(input, &derived_input);
+
+    // See https://google.github.io/filament/Filament.html#mjx-eqn-pointLightLuminanceEquation
+    // Lout = f(v,l) Φ / { 4 π d^2 }⟨n⋅l⟩
+    // where
+    // f(v,l) = (f_d(v,l) + f_r(v,l)) * light_color
+    // Φ is luminous power in lumens
+    // our rangeAttenuation = 1 / d^2 multiplied with an attenuation factor for smoothing at the edge of the non-physical maximum light radius
+
+    // For a point light, luminous intensity, I, in lumens per steradian is given by:
+    // I = Φ / 4 π
+    // The derivation of this can be seen here: https://google.github.io/filament/Filament.html#mjx-eqn-pointLightLuminousPower
+
+    // NOTE: (*light).color.rgb is premultiplied with (*light).intensity / 4 π (which would be the luminous intensity) on the CPU
+
+    var color: vec3<f32>;
+#ifdef STANDARD_MATERIAL_CLEARCOAT
+    // Account for the Fresnel term from the clearcoat darkening the main layer.
+    //
+    // <https://google.github.io/filament/Filament.html#materialsystem/clearcoatmodel/integrationinthesurfaceresponse>
+    color = (diffuse + specular_light * inv_Fc) * inv_Fc + Frc;
+#else   // STANDARD_MATERIAL_CLEARCOAT
+    color = diffuse + specular_light;
+#endif  // STANDARD_MATERIAL_CLEARCOAT
+
+    return color * light_color * derived_input.NdotL;
+}
+
+
+fn apply_screen_lighting(in: pbr_types::PbrInput, out_color: ptr<function, vec4<f32>>) {
+    var output_color: vec4<f32> = in.material.base_color;
+
+    let emissive = in.material.emissive;
+
+    // calculate non-linear roughness from linear perceptualRoughness
+    let metallic = in.material.metallic;
+    let perceptual_roughness = in.material.perceptual_roughness;
+    let roughness = lighting::perceptualRoughnessToRoughness(perceptual_roughness);
+    let ior = in.material.ior;
+    let thickness = in.material.thickness;
+    let reflectance = in.material.reflectance;
+    let diffuse_transmission = in.material.diffuse_transmission;
+    let specular_transmission = in.material.specular_transmission;
+
+    let specular_transmissive_color = specular_transmission * in.material.base_color.rgb;
+
+    let diffuse_occlusion = in.diffuse_occlusion;
+    let specular_occlusion = in.specular_occlusion;
+
+    // Neubelt and Pettineo 2013, "Crafting a Next-gen Material Pipeline for The Order: 1886"
+    let NdotV = max(dot(in.N, in.V), 0.0001);
+    let R = reflect(-in.V, in.N);
+
+#ifdef STANDARD_MATERIAL_CLEARCOAT
+    // Do the above calculations again for the clearcoat layer. Remember that
+    // the clearcoat can have its own roughness and its own normal.
+    let clearcoat = in.material.clearcoat;
+    let clearcoat_perceptual_roughness = in.material.clearcoat_perceptual_roughness;
+    let clearcoat_roughness = lighting::perceptualRoughnessToRoughness(clearcoat_perceptual_roughness);
+    let clearcoat_N = in.clearcoat_N;
+    let clearcoat_NdotV = max(dot(clearcoat_N, in.V), 0.0001);
+    let clearcoat_R = reflect(-in.V, clearcoat_N);
+#endif  // STANDARD_MATERIAL_CLEARCOAT
+
+    let diffuse_color = pbr_functions::calculate_diffuse_color(
+        output_color.rgb,
+        metallic,
+        specular_transmission,
+        diffuse_transmission
+    );
+
+    // Diffuse transmissive strength is inversely related to metallicity and specular transmission, but directly related to diffuse transmission
+    let diffuse_transmissive_color = output_color.rgb * (1.0 - metallic) * (1.0 - specular_transmission) * diffuse_transmission;
+
+    // Calculate the world position of the second Lambertian lobe used for diffuse transmission, by subtracting material thickness
+    let diffuse_transmissive_lobe_world_position = in.world_position - vec4<f32>(in.world_normal, 0.0) * thickness;
+
+    let F0 = pbr_functions::calculate_F0(output_color.rgb, metallic, reflectance);
+    let F_ab = lighting::F_AB(perceptual_roughness, NdotV);
+
+    var lighting_input: lighting::LightingInput;
+    lighting_input.layers[LAYER_BASE].NdotV = NdotV;
+    lighting_input.layers[LAYER_BASE].N = in.N;
+    lighting_input.layers[LAYER_BASE].R = R;
+    lighting_input.layers[LAYER_BASE].perceptual_roughness = perceptual_roughness;
+    lighting_input.layers[LAYER_BASE].roughness = roughness;
+    lighting_input.P = in.world_position.xyz;
+    lighting_input.V = in.V;
+    lighting_input.diffuse_color = diffuse_color;
+    lighting_input.F0_ = F0;
+    lighting_input.F_ab = F_ab;
+#ifdef STANDARD_MATERIAL_CLEARCOAT
+    lighting_input.layers[LAYER_CLEARCOAT].NdotV = clearcoat_NdotV;
+    lighting_input.layers[LAYER_CLEARCOAT].N = clearcoat_N;
+    lighting_input.layers[LAYER_CLEARCOAT].R = clearcoat_R;
+    lighting_input.layers[LAYER_CLEARCOAT].perceptual_roughness = clearcoat_perceptual_roughness;
+    lighting_input.layers[LAYER_CLEARCOAT].roughness = clearcoat_roughness;
+    lighting_input.clearcoat_strength = clearcoat;
+#endif  // STANDARD_MATERIAL_CLEARCOAT
+#ifdef STANDARD_MATERIAL_ANISOTROPY
+    lighting_input.anisotropy = in.anisotropy_strength;
+    lighting_input.Ta = in.anisotropy_T;
+    lighting_input.Ba = in.anisotropy_B;
+#endif  // STANDARD_MATERIAL_ANISOTROPY
+
+    // And do the same for transmissive if we need to.
+#ifdef STANDARD_MATERIAL_DIFFUSE_TRANSMISSION
+    var transmissive_lighting_input: lighting::LightingInput;
+    transmissive_lighting_input.layers[LAYER_BASE].NdotV = 1.0;
+    transmissive_lighting_input.layers[LAYER_BASE].N = -in.N;
+    transmissive_lighting_input.layers[LAYER_BASE].R = vec3(0.0);
+    transmissive_lighting_input.layers[LAYER_BASE].perceptual_roughness = 1.0;
+    transmissive_lighting_input.layers[LAYER_BASE].roughness = 1.0;
+    transmissive_lighting_input.P = diffuse_transmissive_lobe_world_position.xyz;
+    transmissive_lighting_input.V = -in.V;
+    transmissive_lighting_input.diffuse_color = diffuse_transmissive_color;
+    transmissive_lighting_input.F0_ = vec3(0.0);
+    transmissive_lighting_input.F_ab = vec2(0.1);
+#ifdef STANDARD_MATERIAL_CLEARCOAT
+    transmissive_lighting_input.layers[LAYER_CLEARCOAT].NdotV = 0.0;
+    transmissive_lighting_input.layers[LAYER_CLEARCOAT].N = vec3(0.0);
+    transmissive_lighting_input.layers[LAYER_CLEARCOAT].R = vec3(0.0);
+    transmissive_lighting_input.layers[LAYER_CLEARCOAT].perceptual_roughness = 0.0;
+    transmissive_lighting_input.layers[LAYER_CLEARCOAT].roughness = 0.0;
+    transmissive_lighting_input.clearcoat_strength = 0.0;
+#endif  // STANDARD_MATERIAL_CLEARCOAT
+#ifdef STANDARD_MATERIAL_ANISOTROPY
+    lighting_input.anisotropy = in.anisotropy_strength;
+    lighting_input.Ta = in.anisotropy_T;
+    lighting_input.Ba = in.anisotropy_B;
+#endif  // STANDARD_MATERIAL_ANISOTROPY
+#endif  // STANDARD_MATERIAL_DIFFUSE_TRANSMISSION
+
+    let light_color = fetch_screen_light_color(
+        screen_light.light_pos, 
+        screen_light.forward_dir,
+        in.world_position.xyz,
+        in.world_normal,
+        shadow_map,
+        view_bindings::directional_shadow_textures_comparison_sampler
+    );
+    let light_contrib = screen_light_contrib(screen_light.light_pos, light_color, &lighting_input);
+
+    // i should be multiplying by exposure here i think? but that made there be basically no color so idk
+    *out_color += vec4(light_contrib, 0.0);
 }
 
 struct ScreenLightUniform {
@@ -201,40 +406,27 @@ fn fragment(
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
 
-//     // generate a PbrInput struct from the StandardMaterial bindings
-//     var pbr_input = pbr_input_from_standard_material(in, is_front);
+    // generate a PbrInput struct from the StandardMaterial bindings
+    var pbr_input = pbr_input_from_standard_material(in, is_front);
 
-//     pbr_input.material.base_color.a = 1.0;
+    // alpha discard
+    pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
 
-//     // alpha discard
-//     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
-
-// #ifdef PREPASS_PIPELINE
-//     let out = deferred_output(in, pbr_input);
-// #else
-//     var out: FragmentOutput;
-//     // apply lighting
-//     out.color = apply_pbr_lighting(pbr_input);
-
-//     // TODO: add screen light lighting
-
-//     // apply in-shader post processing (fog, alpha-premultiply, and also tonemapping, debanding if the camera is non-hdr)
-//     // note this does not include fullscreen postprocessing effects like bloom.
-//     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
-
-// #endif
-
-
-
+#ifdef PREPASS_PIPELINE
+    let out = deferred_output(in, pbr_input);
+#else
     var out: FragmentOutput;
-    let shadow = fetch_screen_light_shadow(
-        screen_light.light_pos, 
-        screen_light.forward_dir,
-        in.world_position.xyz,
-        in.world_normal,
-        shadow_map,
-        view_bindings::directional_shadow_textures_comparison_sampler
-    );
-    out.color = vec4(vec3(shadow), 1.0);
+    // apply lighting
+    out.color = apply_pbr_lighting(pbr_input);
+
+    var screen_contrib: vec4<f32> = vec4<f32>(0.0);
+    apply_screen_lighting(pbr_input, &screen_contrib);
+    out.color += screen_contrib;
+
+    // apply in-shader post processing (fog, alpha-premultiply, and also tonemapping, debanding if the camera is non-hdr)
+    // note this does not include fullscreen postprocessing effects like bloom.
+    out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+
+#endif
     return out;
 }
