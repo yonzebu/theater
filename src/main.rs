@@ -13,7 +13,7 @@ use screen_light::{
     ScreenLight, ScreenLightExtension, ScreenLightExtensionPlugin, ScreenLightPlugin,
 };
 use script::{ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner};
-use video::{VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream};
+use video::{VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream, VideoStreamSettings};
 mod screen_light;
 mod script;
 mod video;
@@ -85,8 +85,13 @@ fn setup(
     assets: Res<AssetServer>,
 ) {
     commands.spawn((Camera3d::default(), Transform::from_xyz(0., 2., 5.)));
-    commands.spawn((PointLight::default(), Transform::from_xyz(0., 0., -9.)));
-    let video_stream = assets.load::<VideoStream>("nonfinal/testshow.mp4");
+    // commands.spawn((PointLight::default(), Transform::from_xyz(0., 0., -9.)));
+    let video_stream = assets.load_with_settings(
+        "nonfinal/testshow.mp4", 
+        |settings: &mut VideoStreamSettings| {
+            settings.use_mips = true;
+        }
+    );
     // commands.spawn((
     //     AudioPlayer(video_stream.clone()),
     //     PlaybackSettings {

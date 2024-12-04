@@ -185,7 +185,7 @@ fn fetch_screen_light_color(
     let shadow_uv = ndc_pos.xy * vec2(0.5, -0.5) + vec2(0.5);
 
     let shadow = sample_shadow_map(shadow_map, shadow_sampler, shadow_uv, ndc_pos.z, APPROX_TEXEL_SIZE);
-    let color = textureSample(screen_image, screen_sampler, shadow_uv).xyz;
+    let color = textureSampleLevel(screen_image, screen_sampler, shadow_uv, 2.0).xyz;
     return shadow * color;
 }
 

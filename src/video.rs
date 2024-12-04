@@ -9,12 +9,7 @@ use std::{
 };
 
 use bevy::{
-    asset::{AssetLoader, RenderAssetUsages},
-    audio::{self, AddAudioSource},
-    ecs::system::{lifetimeless::SResMut, StaticSystemParam, SystemParam},
-    prelude::*,
-    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
-    tasks::AsyncComputeTaskPool,
+    asset::{meta::Settings, AssetLoader, RenderAssetUsages}, audio::{self, AddAudioSource}, core_pipeline::{blit::{self, BlitPipeline, BlitPipelineKey}, fullscreen_vertex_shader::fullscreen_shader_vertex_state}, ecs::system::{lifetimeless::SResMut, StaticSystemParam, SystemParam}, image::ImageSampler, prelude::*, render::{extract_resource::{ExtractResource, ExtractResourcePlugin}, render_asset::RenderAssets, render_phase::TrackedRenderPass, render_resource::{binding_types::{sampler, texture_2d}, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries, BlendState, ColorTargetState, ColorWrites, CommandEncoderDescriptor, Extent3d, FilterMode, FragmentState, LoadOp, MultisampleState, Operations, PipelineCache, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor, ShaderStages, SpecializedRenderPipeline, SpecializedRenderPipelines, StoreOp, TextureAspect, TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages, TextureViewDescriptor}, renderer::{render_system, RenderDevice, RenderQueue}, texture::GpuImage, Render, RenderApp, RenderSet}, scene::serde, tasks::{AsyncComputeTaskPool, ComputeTaskPool}, utils::HashSet
 };
 use ffmpeg_next::{
     self as ffmpeg, codec, decoder,
@@ -35,21 +30,80 @@ struct DecodedFrame {
     height: u32,
     data: Vec<u8>,
     pts: i64,
+    mip_levels: u32,
 }
 
 impl From<DecodedFrame> for Image {
     fn from(value: DecodedFrame) -> Self {
-        Image::new(
-            Extent3d {
-                width: value.width,
-                height: value.height,
-                depth_or_array_layers: 1,
+        let mut usage = TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING;
+        let mut data = value.data;
+        if value.mip_levels > 1 {
+            usage |= TextureUsages::RENDER_ATTACHMENT;
+        //     let mut mip_level = 1;
+        //     let mut width = value.width as usize;
+        //     let mut height = value.height as usize;
+        //     let mut current_offset = 0;
+        //     while width > 1 || height > 1 || mip_level < value.mip_levels {
+        //         let old_height = width;
+        //         let old_width = width;
+        //         width /= 2;
+        //         width = width.max(1);
+        //         height /= 2;
+        //         height = height.max(1);
+        //         let next_offset = data.len();
+        //         data.reserve(width * height * 4);
+        //         for y in 0..height {
+        //             for x in 0..width {
+        //                 let tl_start = current_offset + 8 * y * old_height + 8 * x;
+        //                 let tl = data.get(tl_start..tl_start + 4).unwrap_or(&[0, 0, 0, 0]);
+        //                 let tr_start = current_offset + 8 * y * old_height + 8 * x + 4;
+        //                 let tr = data.get(tr_start..tr_start + 4).unwrap_or(&[0, 0, 0, 0]);
+        //                 let bl_start = current_offset + (8 * y + 4) * old_height + 8 * x;
+        //                 let bl = data.get(bl_start..bl_start + 4).unwrap_or(&[0, 0, 0, 0]);
+        //                 let br_start = current_offset + (8 * y + 4) * old_height + 8 * x + 4;
+        //                 let br = data.get(br_start..br_start + 4).unwrap_or(&[0, 0, 0, 0]);
+
+        //                 data.extend([
+        //                     (((tl[0] as u32 + bl[0] as u32) / 2 + (tr[0] as u32 + br[0] as u32) / 2) / 2) as u8,
+        //                     (((tl[1] as u32 + bl[1] as u32) / 2 + (tr[1] as u32 + br[1] as u32) / 2) / 2) as u8,
+        //                     (((tl[2] as u32 + bl[2] as u32) / 2 + (tr[2] as u32 + br[2] as u32) / 2) / 2) as u8,
+        //                     (((tl[3] as u32 + bl[3] as u32) / 2 + (tr[3] as u32 + br[3] as u32) / 2) / 2) as u8,
+        //                 ]);
+        //             }
+        //         }
+        //         mip_level += 1;
+        //         current_offset = next_offset;
+        //     }
+        }
+        Image {
+            data,
+            texture_descriptor: TextureDescriptor {
+                label: None,
+                size: Extent3d {
+                    width: value.width,
+                    height: value.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: value.mip_levels.max(1),
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba8Unorm,
+                usage,
+                view_formats: &[]
             },
-            TextureDimension::D2,
-            value.data,
-            TextureFormat::Rgba8Unorm,
-            RenderAssetUsages::all(),
-        )
+            sampler: ImageSampler::Default,
+            texture_view_descriptor: Some(TextureViewDescriptor {
+                label: None,
+                format: None,
+                dimension: None,
+                aspect: TextureAspect::All,
+                base_mip_level: 0,
+                mip_level_count: None,
+                base_array_layer: 0,
+                array_layer_count: None,
+            }),
+            asset_usage: RenderAssetUsages::all(),
+        }
     }
 }
 
@@ -108,6 +162,38 @@ struct DecodedAudio {
     samples: Arc<[f32]>,
 }
 
+#[derive(Debug)]
+pub struct MipInfo {
+    pub mip_count: u32,
+    pub data_len: usize,
+}
+
+fn calculate_mip_info(
+    mut width: u32,
+    mut height: u32,
+    texel_size: u32,
+    use_mips: bool,
+    // ideally this should account for max mips too i think but i probably don't need it for this specific thing
+) -> MipInfo {
+    let mut len = width as usize * height as usize * texel_size as usize;
+    let mut count = 1;
+    if !use_mips {
+        return MipInfo { data_len: len, mip_count: count };
+    }
+    while width > 1 || height > 1 {
+        width /= 2;
+        width = width.max(1);
+        height /= 2;
+        height = height.max(1);
+        len += width as usize * height as usize * texel_size as usize;
+        count += 1;
+    }
+    MipInfo {
+        data_len: len,
+        mip_count: count,
+    }
+}
+
 struct VideoDecoder {
     input: Input,
     video_stream_index: usize,
@@ -121,6 +207,7 @@ struct VideoDecoder {
     send_frames: Sender<DecodedFrame>,
     send_audio: Sender<DecodedAudio>,
     send_self: Sender<VideoDecoder>,
+    use_mips: bool,
 }
 // SAFETY: i don't plan on accessing this when i don't have mutable access anyways
 unsafe impl Sync for VideoDecoder {}
@@ -231,20 +318,6 @@ impl VideoDecoder {
                         Err(ffmpeg::Error::Other { errno: EAGAIN }) => break,
                         Err(e) => panic!("receive frame error: {e:?}"),
                     }
-                    if decoded.rate() != self.audio_decoder.rate() {
-                        println!(
-                            "decoder rate: {}, decoded rate: {}",
-                            self.audio_decoder.rate(),
-                            decoded.rate()
-                        );
-                    }
-                    if decoded.channels() != self.audio_decoder.channels() {
-                        println!(
-                            "decoder channels: {}, decoded channels: {}",
-                            self.audio_decoder.channels(),
-                            decoded.channels()
-                        );
-                    }
                 }
                 let _ = self.send_audio.send(DecodedAudio {
                     pts: self.latest_audio_pts.unwrap(),
@@ -262,11 +335,16 @@ impl VideoDecoder {
                             scaled = frame::Video::empty();
                             self.scaler.0.run(&decoded, &mut scaled).unwrap();
 
+                            let mut data = scaled.data(0).to_owned();
+                            let mip_info = calculate_mip_info(scaled.width(), scaled.height(), 4, self.use_mips);
+                            data.resize(mip_info.data_len, 0);
+
                             let _ = self.send_frames.send(DecodedFrame {
                                 width: scaled.width(),
                                 height: scaled.height(),
-                                data: scaled.data(0).to_owned(),
+                                data,
                                 pts: decoded.pts().unwrap(),
+                                mip_levels: mip_info.mip_count,
                             });
                         }
                         Err(ffmpeg::Error::Other { errno: EAGAIN }) => break,
@@ -320,7 +398,7 @@ pub struct VideoStream {
 }
 
 impl VideoStream {
-    pub fn new(source: impl AsRef<Path>) -> Result<Self, ffmpeg::Error> {
+    pub fn new(source: impl AsRef<Path>, use_mips: bool) -> Result<Self, ffmpeg::Error> {
         let input = ffmpeg::format::input(&source)?;
         let video_stream = input
             .streams()
@@ -368,6 +446,7 @@ impl VideoStream {
                 send_self: send_decoder,
                 send_frames,
                 send_audio,
+                use_mips,
             }),
             recv_decoder: Mutex::new(recv_decoder),
             recv_frames: Mutex::new(recv_frames),
@@ -383,88 +462,6 @@ impl VideoStream {
             audio_channels,
             audio_sample_rate,
         })
-    }
-
-    // get new frames
-    fn update(
-        &mut self,
-        mut convert_frame: impl FnMut(DecodedFrame) -> BufferedFrame,
-        dt: Rational,
-    ) {
-        let vtb = self.video_time_base;
-        let atb = self.audio_time_base;
-        if self.playing {
-            self.video_progress = self.video_progress + dt;
-            self.audio_progress = self.audio_progress + dt;
-        }
-        let video_lookahead = self.video_progress + Rational(5, 1);
-        let audio_lookahead = self.audio_progress + Rational(5, 1);
-        if let Some(mut decoder) = self.decoder.take() {
-            let needs_frames = self
-                .buffered_frames
-                .back()
-                .is_none_or(|frame| Rational(frame.pts as i32, 1) <= video_lookahead / vtb);
-            let needs_audio = self
-                .buffered_audio
-                .back()
-                .is_none_or(|audio| Rational(audio.pts as i32, 1) <= audio_lookahead / atb);
-            if (needs_frames || needs_audio) && !decoder.finished {
-                if let Some(frame) = self.buffered_frames.back() {
-                    decoder.latest_video_pts = Some(frame.pts);
-                }
-                if let Some(audio) = self.buffered_audio.back() {
-                    decoder.latest_audio_pts = Some(audio.pts);
-                }
-                AsyncComputeTaskPool::get()
-                    .spawn(async move {
-                        decoder.decode_until_pts_targets(
-                            Into::<f64>::into(video_lookahead / vtb) as i64,
-                            Into::<f64>::into(audio_lookahead / atb) as i64,
-                        )
-                    })
-                    .detach();
-            } else {
-                if decoder.finished {
-                    self.audio_sinks.get_mut().unwrap().clear();
-                }
-                // no need to decode more frames yet
-                self.decoder = Some(decoder);
-            }
-        } else if let Ok(decoder) = self.recv_decoder.get_mut().unwrap().try_recv() {
-            self.decoder = Some(decoder);
-        }
-
-        while let Ok(frame) = self.recv_frames.get_mut().unwrap().try_recv() {
-            self.buffered_frames.push_back(convert_frame(frame));
-        }
-        while let Ok(audio) = self.recv_audio.get_mut().unwrap().try_recv() {
-            let buffered = BufferedAudio {
-                pts: audio.pts,
-                samples: audio.samples,
-            };
-            self.audio_sinks
-                .get_mut()
-                .unwrap()
-                .retain(|sink| sink.send(buffered.clone()).is_ok());
-            self.buffered_audio.push_back(buffered);
-        }
-
-        let current_vpts: f64 = (self.video_progress / vtb).into();
-        let current_vpts = current_vpts as i64;
-        let current = self
-            .buffered_frames
-            .partition_point(|frame| frame.pts < current_vpts);
-        self.buffered_frames.drain(0..current);
-        // i don't like how this is managed right now :/
-        // i could probably find a way to both clean up old (unused) audio data + not make too many
-        // unnecessary allocations, but it would be very annoying and probably not pretty
-        // maybe if i drew in another dep though
-        let current_apts: f64 = (self.audio_progress / atb).into();
-        let current_apts = current_apts as i64;
-        let current = self
-            .buffered_audio
-            .partition_point(|audio| audio.pts < current_apts);
-        self.buffered_audio.drain(0..current);
     }
 }
 
@@ -545,6 +542,99 @@ impl Decodable for VideoStream {
     }
 }
 
+#[derive(Clone, Default, Deref, DerefMut, Resource, ExtractResource, Reflect)]
+struct QueuedFrameMips(Vec<AssetId<Image>>);
+
+#[derive(Resource)]
+pub struct MipGenerationPipeline {
+    pub texture_bind_group: BindGroupLayout,
+    pub sampler: Sampler,
+    pub shader: Handle<Shader>,
+}
+
+impl FromWorld for MipGenerationPipeline {
+    fn from_world(render_world: &mut World) -> Self {
+        let asset_server = render_world.resource::<AssetServer>();
+
+        let shader = asset_server.load("generate_mips.wgsl");
+
+        let render_device = render_world.resource::<RenderDevice>();
+
+        let texture_bind_group = render_device.create_bind_group_layout(
+            "mip_generation_bind_group_layout",
+            &BindGroupLayoutEntries::sequential(
+                ShaderStages::FRAGMENT,
+                (
+                    texture_2d(TextureSampleType::Float { filterable: true }),
+                    sampler(SamplerBindingType::Filtering),
+                ),
+            ),
+        );
+
+        let sampler = render_device.create_sampler(&SamplerDescriptor {
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            ..default()
+        });
+
+        MipGenerationPipeline {
+            texture_bind_group,
+            sampler,
+            shader,
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Clone, Copy)]
+pub struct MipGenerationPipelineKey {
+    pub texture_format: TextureFormat,
+    pub blend_state: Option<BlendState>,
+    pub samples: u32,
+}
+
+impl SpecializedRenderPipeline for MipGenerationPipeline {
+    type Key = MipGenerationPipelineKey;
+
+    fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
+        RenderPipelineDescriptor {
+            label: Some("mip generation pipeline".into()),
+            layout: vec![self.texture_bind_group.clone()],
+            vertex: fullscreen_shader_vertex_state(),
+            fragment: Some(FragmentState {
+                shader: self.shader.clone(),
+                shader_defs: vec![],
+                entry_point: "fragment".into(),
+                targets: vec![Some(ColorTargetState {
+                    format: key.texture_format,
+                    blend: key.blend_state,
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            primitive: PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: MultisampleState {
+                count: key.samples,
+                ..Default::default()
+            },
+            push_constant_ranges: Vec::new(),
+            zero_initialize_workgroup_memory: false,
+        }
+    }
+}
+
+#[derive(serde_derive::Serialize, serde_derive::Deserialize)]
+pub struct VideoStreamSettings {
+    pub use_mips: bool,
+}
+
+impl Default for VideoStreamSettings {
+    fn default() -> Self {
+        VideoStreamSettings {
+            use_mips: false,
+        }
+    }
+}
+
 struct VideoStreamLoader {
     root: PathBuf,
 }
@@ -576,14 +666,14 @@ impl FromWorld for VideoStreamLoader {
 impl AssetLoader for VideoStreamLoader {
     type Asset = VideoStream;
     type Error = ffmpeg::Error;
-    type Settings = ();
+    type Settings = VideoStreamSettings;
     async fn load(
         &self,
         _reader: &mut dyn bevy::asset::io::Reader,
-        _settings: &Self::Settings,
+        settings: &Self::Settings,
         load_context: &mut bevy::asset::LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        VideoStream::new(self.root.join(load_context.path()))
+        VideoStream::new(self.root.join(load_context.path()), settings.use_mips)
     }
     fn extensions(&self) -> &[&str] {
         &["mp4"]
@@ -604,11 +694,32 @@ impl Plugin for VideoPlugin {
         app.init_asset::<VideoStream>()
             .init_asset_loader::<VideoStreamLoader>()
             .add_audio_source::<VideoStream>()
+            .init_resource::<QueuedFrameMips>()
             .add_systems(PostUpdate, update_videos.in_set(VideoSet::UpdateStreams))
             .configure_sets(
                 PostUpdate,
                 VideoSet::UpdateStreams.before(VideoSet::UpdatePlayers),
-            );
+            )
+            .add_plugins(ExtractResourcePlugin::<QueuedFrameMips>::default());
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app.init_resource::<RetryNextFrameMips>()
+                .add_systems(
+                    Render, 
+                    (
+                        queue_mip_pipelines.in_set(RenderSet::PrepareResources), 
+                        // this is after the render system so the pipeline cache knows about whatever got queued, but it does mean that there will be definitely at least 1 frame per image without the updated mips
+                        queue_frame_mips_generation.after(render_system).in_set(RenderSet::Render)
+                    )
+                );
+        }
+    }
+
+    fn finish(&self, app: &mut App) {
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app
+                .init_resource::<MipGenerationPipeline>()
+                .init_resource::<SpecializedRenderPipelines<MipGenerationPipeline>>();
+        }
     }
 }
 
@@ -699,19 +810,262 @@ impl<R: ReceiveFrame + Component> Plugin for VideoPlayerPlugin<R> {
 fn update_videos(
     mut videos: ResMut<Assets<VideoStream>>,
     mut images: ResMut<Assets<Image>>,
+    mut queued_frame_mips: ResMut<QueuedFrameMips>,
     time: Res<Time>,
 ) {
+    queued_frame_mips.clear();
+    let dt: Rational = time.delta_secs_f64().into();
     for (_, video) in videos.iter_mut() {
-        video.update(
-            |frame| {
-                let pts = frame.pts;
-                BufferedFrame {
-                    image: images.add(frame),
-                    pts,
+        let video = &mut *video;
+        let vtb = video.video_time_base;
+        let atb = video.audio_time_base;
+        if video.playing {
+            video.video_progress = video.video_progress + dt;
+            video.audio_progress = video.audio_progress + dt;
+        }
+        let video_lookahead = video.video_progress + Rational(5, 1);
+        let audio_lookahead = video.audio_progress + Rational(5, 1);
+        if let Some(mut decoder) = video.decoder.take() {
+            let needs_frames = video
+                .buffered_frames
+                .back()
+                .is_none_or(|frame| Rational(frame.pts as i32, 1) <= video_lookahead / vtb);
+            let needs_audio = video
+                .buffered_audio
+                .back()
+                .is_none_or(|audio| Rational(audio.pts as i32, 1) <= audio_lookahead / atb);
+            if (needs_frames || needs_audio) && !decoder.finished {
+                if let Some(frame) = video.buffered_frames.back() {
+                    decoder.latest_video_pts = Some(frame.pts);
                 }
-            },
-            time.delta_secs_f64().into(),
-        );
+                if let Some(audio) = video.buffered_audio.back() {
+                    decoder.latest_audio_pts = Some(audio.pts);
+                }
+                AsyncComputeTaskPool::get()
+                    .spawn(async move {
+                        decoder.decode_until_pts_targets(
+                            Into::<f64>::into(video_lookahead / vtb) as i64,
+                            Into::<f64>::into(audio_lookahead / atb) as i64,
+                        )
+                    })
+                    .detach();
+            } else {
+                if decoder.finished {
+                    video.audio_sinks.get_mut().unwrap().clear();
+                }
+                // no need to decode more frames yet
+                video.decoder = Some(decoder);
+            }
+        } else if let Ok(decoder) = video.recv_decoder.get_mut().unwrap().try_recv() {
+            video.decoder = Some(decoder);
+        }
+
+        while let Ok(frame) = video.recv_frames.get_mut().unwrap().try_recv() {
+            let pts = frame.pts;
+            let mip_levels = frame.mip_levels;
+            let image: Image = frame.into();
+            let texture_format = image.texture_descriptor.format;
+            let image = images.add(image);
+            let image_id = image.id();
+            video.buffered_frames.push_back(BufferedFrame {
+                image,
+                pts,
+            });
+            if mip_levels > 1 {
+                queued_frame_mips.push(image_id);
+            }
+        }
+        while let Ok(audio) = video.recv_audio.get_mut().unwrap().try_recv() {
+            let buffered = BufferedAudio {
+                pts: audio.pts,
+                samples: audio.samples,
+            };
+            video.audio_sinks
+                .get_mut()
+                .unwrap()
+                .retain(|sink| sink.send(buffered.clone()).is_ok());
+            video.buffered_audio.push_back(buffered);
+        }
+
+        let current_vpts: f64 = (video.video_progress / vtb).into();
+        let current_vpts = current_vpts as i64;
+        let current = video
+            .buffered_frames
+            .partition_point(|frame| frame.pts < current_vpts);
+        video.buffered_frames.drain(0..current);
+        // i don't like how this is managed right now :/
+        // i could probably find a way to both clean up old (unused) audio data + not make too many
+        // unnecessary allocations, but it would be very annoying and probably not pretty
+        // maybe if i drew in another dep though
+        let current_apts: f64 = (video.audio_progress / atb).into();
+        let current_apts = current_apts as i64;
+        let current = video
+            .buffered_audio
+            .partition_point(|audio| audio.pts < current_apts);
+        video.buffered_audio.drain(0..current);
+    }
+}
+
+fn queue_mip_pipelines(
+    queued_frame_mips: Res<QueuedFrameMips>,
+    pipeline_cache: Res<PipelineCache>,
+    mut mip_pipelines: ResMut<SpecializedRenderPipelines<MipGenerationPipeline>>,
+    mip_pipeline: Res<MipGenerationPipeline>,
+    gpu_images: Res<RenderAssets<GpuImage>>,
+) {
+    for frame_id in queued_frame_mips.iter() {
+        if let Some(gpu_image) = gpu_images.get(*frame_id) {
+            mip_pipelines.specialize(
+                &pipeline_cache, 
+                &mip_pipeline, 
+                MipGenerationPipelineKey {
+                    texture_format: gpu_image.texture_format,
+                    blend_state: None,
+                    // this is probably incorrect in general but works in this particular case
+                    samples: 1,
+                }
+            );
+        }
+    }
+}
+
+#[derive(Default, Deref, DerefMut, Resource, Reflect)]
+struct RetryNextFrameMips(HashSet<AssetId<Image>>);
+
+// struct MipInProgress {
+//     mip_info: Option<MipInfo>,
+//     id: AssetId<Image>,
+// }
+
+fn queue_frame_mips_generation(
+    render_device: Res<RenderDevice>,
+    render_queue: Res<RenderQueue>,
+    mut queued_frame_mips: ResMut<QueuedFrameMips>,
+    gpu_images: Res<RenderAssets<GpuImage>>,
+    mut mip_pipelines: ResMut<SpecializedRenderPipelines<MipGenerationPipeline>>,
+    mip_pipeline: Res<MipGenerationPipeline>,
+    pipeline_cache: Res<PipelineCache>,
+    mut retry_next_frame_mips: ResMut<RetryNextFrameMips>,
+    // mut working_mips_set: Local<Vec<MipInProgress>>,
+) {
+    let mut command_encoder = None;
+    // println!("1");
+    // working_mips_set.extend(
+    //     retry_next_frame_mips
+    //         .drain()
+    //         .chain(queued_frame_mips.drain(..))
+    //         .map(|id| {
+    //             gpu_images
+    //                 .get(id)
+    //                 .map_or(MipInProgress { mip_info: None, id }, |gpu_image| {
+    //                     MipInProgress {
+    //                         mip_info: Some(calculate_mip_info(gpu_image.size.x, gpu_image.size.y, 4, true)),
+    //                         id
+    //                     }
+    //                 })
+    //         })
+    // );
+    // let mut found_mip_in_progress;
+    // let mip_level = 0;
+    // loop {
+
+    // }
+    let mut try_queue_mips = |frame| {
+        if let Some(gpu_image) = gpu_images.get(frame) {
+            // println!("2");
+            let encoder = command_encoder.get_or_insert_with(|| {
+                render_device.create_command_encoder(&CommandEncoderDescriptor { label: Some("video frame mips generation") })
+            });
+            let pipeline_id = mip_pipelines.specialize(
+                &pipeline_cache, 
+                &mip_pipeline, 
+                MipGenerationPipelineKey {
+                    texture_format: gpu_image.texture_format,
+                    blend_state: None,
+                    // this is probably incorrect in general but works in this particular case
+                    samples: 1,
+                }
+            );
+            let Some(pipeline) = pipeline_cache.get_render_pipeline(pipeline_id) else {
+                // println!("3");
+                return false;
+            };
+            let mip_levels = calculate_mip_info(gpu_image.size.x, gpu_image.size.y, 4, true).mip_count;
+            let mut lower_mip = gpu_image.texture.create_view(&TextureViewDescriptor { 
+                label: None, 
+                format: None, 
+                dimension: None, 
+                aspect: TextureAspect::All, 
+                base_mip_level: 0, 
+                mip_level_count: Some(1), 
+                base_array_layer: 0, 
+                array_layer_count: None 
+            });
+            let mut higher_mip;
+            for mip in 1..mip_levels {
+                higher_mip = gpu_image.texture.create_view(&TextureViewDescriptor { 
+                    label: None, 
+                    format: None, 
+                    dimension: None, 
+                    aspect: TextureAspect::All, 
+                    base_mip_level: mip, 
+                    mip_level_count: Some(1), 
+                    base_array_layer: 0, 
+                    array_layer_count: None 
+                });
+                let bind_group = render_device.create_bind_group(
+                    "mip generation bind group", 
+                    &mip_pipeline.texture_bind_group, 
+                    &BindGroupEntries::sequential((
+                        &lower_mip,
+                        &mip_pipeline.sampler,
+                    ))
+                );
+                let mut render_pass = TrackedRenderPass::new(
+                    &render_device, 
+                    encoder.begin_render_pass(&RenderPassDescriptor {
+                        label: None,
+                        color_attachments: &[Some(RenderPassColorAttachment {
+                            view: &higher_mip,
+                            resolve_target: None,
+                            ops: Operations {
+                                load: LoadOp::Clear(default()),
+                                store: StoreOp::Store,
+                            }
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    }),
+                );
+                render_pass.set_render_pipeline(pipeline);
+                render_pass.set_bind_group(0, &bind_group, &[]);
+                render_pass.draw(0..3, 0..1);
+                drop(render_pass);
+                lower_mip = higher_mip;
+            }
+            // println!("4");
+            return true;
+        }
+        // println!("5");
+        false
+    };
+    retry_next_frame_mips.retain(|&queued_frame| {
+        !try_queue_mips(queued_frame)
+    });
+    for queued_frame in queued_frame_mips.drain(..) {
+        if !try_queue_mips(queued_frame) {
+            retry_next_frame_mips.insert(queued_frame);
+        }
+    }
+    // println!("7 {}", command_encoder.is_some());
+    if let Some(encoder) = command_encoder {
+        // println!("8");
+        let queue = render_queue.clone();
+        AsyncComputeTaskPool::get().spawn(async move {
+            queue.submit([encoder.finish()]);
+            // println!("9");
+        }).detach();
     }
 }
 
