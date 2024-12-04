@@ -510,11 +510,9 @@ impl Iterator for VideoAudioSource {
 
 impl audio::Source for VideoAudioSource {
     fn channels(&self) -> u16 {
-        // println!("channels: {}", self.channels);
         self.channels
     }
     fn sample_rate(&self) -> u32 {
-        // println!("sample rate: {}", self.sample_rate);
         self.sample_rate
     }
     fn current_frame_len(&self) -> Option<usize> {
@@ -932,11 +930,6 @@ fn queue_mip_pipelines(
 #[derive(Default, Deref, DerefMut, Resource, Reflect)]
 struct RetryNextFrameMips(HashSet<AssetId<Image>>);
 
-// struct MipInProgress {
-//     mip_info: Option<MipInfo>,
-//     id: AssetId<Image>,
-// }
-
 fn queue_frame_mips_generation(
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
@@ -946,33 +939,10 @@ fn queue_frame_mips_generation(
     mip_pipeline: Res<MipGenerationPipeline>,
     pipeline_cache: Res<PipelineCache>,
     mut retry_next_frame_mips: ResMut<RetryNextFrameMips>,
-    // mut working_mips_set: Local<Vec<MipInProgress>>,
 ) {
     let mut command_encoder = None;
-    // println!("1");
-    // working_mips_set.extend(
-    //     retry_next_frame_mips
-    //         .drain()
-    //         .chain(queued_frame_mips.drain(..))
-    //         .map(|id| {
-    //             gpu_images
-    //                 .get(id)
-    //                 .map_or(MipInProgress { mip_info: None, id }, |gpu_image| {
-    //                     MipInProgress {
-    //                         mip_info: Some(calculate_mip_info(gpu_image.size.x, gpu_image.size.y, 4, true)),
-    //                         id
-    //                     }
-    //                 })
-    //         })
-    // );
-    // let mut found_mip_in_progress;
-    // let mip_level = 0;
-    // loop {
-
-    // }
     let mut try_queue_mips = |frame| {
         if let Some(gpu_image) = gpu_images.get(frame) {
-            // println!("2");
             let encoder = command_encoder.get_or_insert_with(|| {
                 render_device.create_command_encoder(&CommandEncoderDescriptor { label: Some("video frame mips generation") })
             });
@@ -987,7 +957,6 @@ fn queue_frame_mips_generation(
                 }
             );
             let Some(pipeline) = pipeline_cache.get_render_pipeline(pipeline_id) else {
-                // println!("3");
                 return false;
             };
             let mip_levels = calculate_mip_info(gpu_image.size.x, gpu_image.size.y, 4, true).mip_count;
@@ -1044,10 +1013,8 @@ fn queue_frame_mips_generation(
                 drop(render_pass);
                 lower_mip = higher_mip;
             }
-            // println!("4");
             return true;
         }
-        // println!("5");
         false
     };
     retry_next_frame_mips.retain(|&queued_frame| {
@@ -1058,13 +1025,10 @@ fn queue_frame_mips_generation(
             retry_next_frame_mips.insert(queued_frame);
         }
     }
-    // println!("7 {}", command_encoder.is_some());
     if let Some(encoder) = command_encoder {
-        // println!("8");
         let queue = render_queue.clone();
         AsyncComputeTaskPool::get().spawn(async move {
             queue.submit([encoder.finish()]);
-            // println!("9");
         }).detach();
     }
 }

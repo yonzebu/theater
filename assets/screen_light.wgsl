@@ -158,6 +158,62 @@ fn sample_shadow_map(
 //     return sample_shadow_map_hardware(shadow_map, shadow_sampler, light_uv, depth);
 }
 
+fn sample_screen(
+    screen: texture_2d<f32>,
+    screen_sampler: sampler,
+    light_local: vec2<f32>
+) -> vec4<f32> {
+    let screen_size = vec2<f32>(textureDimensions(screen));
+    let inv_screen_size = 1.0 / screen_size;
+    var sum = vec4(0.0);
+    for (var x: i32 = 0; x < 5; x += 1) {
+        for (var y: i32 = 0; y < 5; y += 1) {
+            let offset = (vec2(f32(x), f32(y)) - vec2(2.0, 2.0)) * 5.0 * inv_screen_size;
+            let offset_uv = light_local + offset;
+            sum += textureSample(screen, screen_sampler, offset_uv);
+        }
+    }
+    return sum / 25.0;
+    // let uv = light_local * screen_size;
+    // var base_uv = floor(uv + 0.5);
+    // let s = (uv.x + 0.5 - base_uv.x);
+    // let t = (uv.y + 0.5 - base_uv.y);
+    // base_uv -= 0.5;
+    // base_uv *= inv_screen_size;
+
+    // let uw0 = (4.0 - 3.0 * s);
+    // let uw1 = 7.0;
+    // let uw2 = (1.0 + 3.0 * s);
+
+    // let u0 = (3.0 - 2.0 * s) / uw0 - 2.0;
+    // let u1 = (3.0 + s) / uw1;
+    // let u2 = s / uw2 + 2.0;
+
+    // let vw0 = (4.0 - 3.0 * t);
+    // let vw1 = 7.0;
+    // let vw2 = (1.0 + 3.0 * t);
+
+    // let v0 = (3.0 - 2.0 * t) / vw0 - 2.0;
+    // let v1 = (3.0 + t) / vw1;
+    // let v2 = t / vw2 + 2.0;
+
+    // var sum = vec4(0.0);
+
+    // sum += uw0 * vw0 * textureSample(screen, screen_sampler, base_uv + (vec2(u0, v0) * inv_screen_size));
+    // sum += uw1 * vw0 * textureSample(screen, screen_sampler, base_uv + (vec2(u1, v0) * inv_screen_size));
+    // sum += uw2 * vw0 * textureSample(screen, screen_sampler, base_uv + (vec2(u2, v0) * inv_screen_size));
+
+    // sum += uw0 * vw1 * textureSample(screen, screen_sampler, base_uv + (vec2(u0, v1) * inv_screen_size));
+    // sum += uw1 * vw1 * textureSample(screen, screen_sampler, base_uv + (vec2(u1, v1) * inv_screen_size));
+    // sum += uw2 * vw1 * textureSample(screen, screen_sampler, base_uv + (vec2(u2, v1) * inv_screen_size));
+
+    // sum += uw0 * vw2 * textureSample(screen, screen_sampler, base_uv + (vec2(u0, v2) * inv_screen_size));
+    // sum += uw1 * vw2 * textureSample(screen, screen_sampler, base_uv + (vec2(u1, v2) * inv_screen_size));
+    // sum += uw2 * vw2 * textureSample(screen, screen_sampler, base_uv + (vec2(u2, v2) * inv_screen_size));
+
+    // return sum * (1.0 / 144.0);
+}
+
 const APPROX_TEXEL_SIZE: f32 = 0.002;
 // these are taken from bevy's default biases for spot lights
 const DEPTH_BIAS: f32 = 0.02;
@@ -185,8 +241,8 @@ fn fetch_screen_light_color(
     let shadow_uv = ndc_pos.xy * vec2(0.5, -0.5) + vec2(0.5);
 
     let shadow = sample_shadow_map(shadow_map, shadow_sampler, shadow_uv, ndc_pos.z, APPROX_TEXEL_SIZE);
-    let color = textureSampleLevel(screen_image, screen_sampler, shadow_uv, 2.0).xyz;
-    return shadow * color;
+    let color = sample_screen(screen_image, screen_sampler, shadow_uv).xyz;
+    return shadow * color * 0.25;
 }
 
 fn screen_light_contrib(

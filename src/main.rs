@@ -89,7 +89,7 @@ fn setup(
     let video_stream = assets.load_with_settings(
         "nonfinal/testshow.mp4", 
         |settings: &mut VideoStreamSettings| {
-            settings.use_mips = true;
+            settings.use_mips = false;
         }
     );
     // commands.spawn((
