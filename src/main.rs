@@ -5,6 +5,7 @@ use bevy::ecs::component::ComponentId;
 use bevy::ecs::world::DeferredWorld;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, NotShadowCaster};
 use bevy::render::render_resource::{AsBindGroup, Face, ShaderRef};
+use bevy::utils::hashbrown::HashMap;
 use bevy::{math::vec3, prelude::*};
 
 mod debug;
@@ -46,7 +47,7 @@ const SCREEN_WIDTH: f32 = 18.;
 const SCREEN_HEIGHT: f32 = SCREEN_WIDTH * 9. / 16.;
 const SCREEN_LIGHT_POS: f32 = SCREEN_POS - 10. / 4.;
 
-#[derive(Resource)]
+#[derive(Resource, Deref, DerefMut)]
 struct AssetsToLoad(Vec<UntypedAssetId>);
 
 impl<I> From<I> for AssetsToLoad
@@ -355,6 +356,11 @@ fn update_chair_materials(
         Assets<ExtendedMaterial<StandardMaterial, ScreenLightExtension>>,
     >,
     screen_light: Query<Entity, With<ScreenLight>>,
+    mut to_load: ResMut<AssetsToLoad>,
+    mut found_materials: Local<HashMap<
+        AssetId<StandardMaterial>, 
+        Handle<ExtendedMaterial<StandardMaterial, ScreenLightExtension>>
+    >>,
 ) {
     let Ok(screen_light) = screen_light.get_single() else {
         return;
@@ -364,20 +370,29 @@ fn update_chair_materials(
             let Ok((entity, old_material_handle)) = not_updateds.get(descendant) else {
                 continue;
             };
+            if let Some(extended) = found_materials.get(&old_material_handle.id()) {
+                commands
+                    .entity(entity)
+                    .insert(MeshMaterial3d(extended.clone()))
+                    .remove::<MeshMaterial3d<StandardMaterial>>();
+                continue;
+            }
             let Some(old_material) = materials.get_mut(old_material_handle.id()) else {
                 continue;
             };
+            let extended = extended_materials.add(ExtendedMaterial {
+                base: old_material.clone(),
+                extension: ScreenLightExtension {
+                    light: screen_light,
+                },
+            });
+            let extended_id = extended.id();
+            found_materials.insert(old_material_handle.id(), extended.clone());
             commands
                 .entity(entity)
-                .insert(MeshMaterial3d(extended_materials.add(ExtendedMaterial {
-                    base: old_material.clone(),
-                    extension: ScreenLightExtension {
-                        light: screen_light,
-                    },
-                })))
+                .insert(MeshMaterial3d(extended))
                 .remove::<MeshMaterial3d<StandardMaterial>>();
-            // old_material.base_color.set_alpha(0.);
-            // old_material.alpha_mode = AlphaMode::Mask(1.0);
+            to_load.0.push(extended_id.untyped());
         }
     }
 }
@@ -407,17 +422,14 @@ fn update_video_player(
 fn check_loaded_state(
     mut commands: Commands,
     assets: Res<AssetServer>,
-    to_load: Option<Res<AssetsToLoad>>,
+    mut to_load: ResMut<AssetsToLoad>,
     mut waiting_for_load: Query<Entity, With<WaitingForLoads>>,
 ) {
-    let Some(to_load) = to_load else {
-        return;
-    };
-    if to_load.0.iter().all(|id| assets.is_loaded(*id)) {
+    to_load.retain(|&id| assets.is_loaded(id));
+    if to_load.len() == 0 {
         for waiting in waiting_for_load.iter_mut() {
             commands.entity(waiting).remove::<WaitingForLoads>();
         }
-        commands.remove_resource::<AssetsToLoad>();
     }
 }
 
@@ -450,8 +462,8 @@ fn main() {
         .add_systems(
             Update,
             (
-                check_loaded_state,
-                update_chair_materials,
+                (update_chair_materials,
+                check_loaded_state,).chain(),
                 update,
                 update_video_player,
             ),
