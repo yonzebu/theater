@@ -1,4 +1,4 @@
-#![allow(unused, clippy::type_complexity)]
+#![allow(unused, clippy::type_complexity, clippy::too_many_arguments)]
 use bevy::asset::UntypedAssetId;
 use bevy::audio::PlaybackMode;
 use bevy::ecs::component::ComponentId;
@@ -471,9 +471,8 @@ fn check_loaded_state(
 ) {
     to_load.retain(|&id| !assets.is_loaded(id));
     if to_load.len() == 0 {
-        match game_state.get() {
-            &GameState::Loading(progress) => next_game_state.set(GameState::Active(progress)),
-            _ => {}
+        if let &GameState::Loading(progress) = game_state.get() {
+            next_game_state.set(GameState::Active(progress));
         }
     }
 }

@@ -280,15 +280,11 @@ impl VideoDecoder {
             }
             if should_send_packet {
                 if is_audio_packet {
-                    match self.audio_decoder.send_packet(&packet) {
-                        Err(e) => println!("send audio packet error: {e:?}"),
-                        _ => {}
+                    if let Err(e) = self.audio_decoder.send_packet(&packet) {
+                        warn!("send audio packet error: {e:?}");
                     }
-                } else {
-                    match self.video_decoder.send_packet(&packet) {
-                        Err(e) => println!("send video packet error: {e:?}"),
-                        _ => {}
-                    }
+                } else if let Err(e) = self.video_decoder.send_packet(&packet) {
+                    warn!("send video packet error: {e:?}");
                 }
             }
 
@@ -671,15 +667,9 @@ impl SpecializedRenderPipeline for MipGenerationPipeline {
     }
 }
 
-#[derive(serde_derive::Serialize, serde_derive::Deserialize)]
+#[derive(Default, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct VideoStreamSettings {
     pub use_mips: bool,
-}
-
-impl Default for VideoStreamSettings {
-    fn default() -> Self {
-        VideoStreamSettings { use_mips: false }
-    }
 }
 
 struct VideoStreamLoader {
@@ -901,7 +891,11 @@ fn update_videos(
                     .detach();
             } else {
                 if decoder.finished {
-                    video.audio_sinks.get_mut().unwrap_or_else(PoisonError::into_inner).clear();
+                    video
+                        .audio_sinks
+                        .get_mut()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .clear();
                 }
                 // no need to decode more frames yet
                 video.decoder = Some(decoder);
@@ -936,8 +930,13 @@ fn update_videos(
         }
         let mut first_pts = None;
         let mut all_samples = Vec::new();
-        while let Ok(DecodedAudio { pts, mut samples }) = video.recv_audio.get_mut().unwrap_or_else(PoisonError::into_inner).try_recv() {
-            if all_samples.len() == 0 {
+        while let Ok(DecodedAudio { pts, mut samples }) = video
+            .recv_audio
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .try_recv()
+        {
+            if all_samples.is_empty() {
                 first_pts = Some(pts);
                 std::mem::swap(&mut samples, &mut all_samples);
             } else {
@@ -1008,6 +1007,7 @@ fn queue_mip_pipelines(
 #[derive(Default, Deref, DerefMut, Resource, Reflect)]
 struct RetryNextFrameMips(HashSet<AssetId<Image>>);
 
+#[allow(clippy::too_many_arguments)]
 fn queue_frame_mips_generation(
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
