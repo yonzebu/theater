@@ -6,14 +6,7 @@ use bevy::{
     prelude::*,
 };
 use nom::{
-    branch::alt,
-    bytes::complete::{tag, take_till, take_till1},
-    character::complete::{line_ending, multispace0},
-    combinator::{eof, peek, verify},
-    error::ParseError,
-    multi::{fold_many0, many0},
-    sequence::{delimited, preceded, terminated, tuple},
-    IResult, InputLength, Parser,
+    branch::alt, bytes::complete::{tag, take_till, take_till1}, character::complete::{line_ending, multispace0}, combinator::{eof, peek, verify}, error::ParseError, multi::{fold_many0, many0}, number::complete::double, sequence::{delimited, preceded, terminated, tuple}, IResult, InputLength, Parser
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,18 +52,43 @@ pub enum ScriptEntry {
         choices: AnswerBlock,
     },
     Line(String),
+    Wait(Duration),
+    StartShow,
 }
 
 fn line_starter<'a>(starter: &'a str) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str> {
     preceded(multispace0, tag(starter))
 }
 
-fn till_newline0(input: &str) -> IResult<&str, &str> {
+fn till_newline0<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E> 
+where
+    E: ParseError<&'a str>,
+{
     take_till(|c| c == '\r' || c == '\n')(input)
 }
 
-fn till_newline1(input: &str) -> IResult<&str, &str> {
+fn till_newline1<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E> 
+where
+    E: ParseError<&'a str>,
+{
     take_till1(|c| c == '\r' || c == '\n')(input)
+}
+
+fn command_line<'a, F, O, E>(f: F) -> impl FnMut(&'a str) -> IResult<&'a str, O, E> 
+where
+    F: Parser<&'a str, O, E>,
+    E: ParseError<&'a str>,
+{
+    delimited(
+        tuple((multispace0, tag("["), multispace0)), 
+        f, 
+        tuple((
+            multispace0, 
+            tag("]"), 
+            verify(till_newline0, |s: &str| s.trim().is_empty()), 
+            Parser::or(line_ending, eof),
+        ))
+    )
 }
 
 fn prompt(lines: &str) -> IResult<&str, &str> {
@@ -104,14 +122,22 @@ fn line(lines: &str) -> IResult<&str, &str> {
     )(lines)
 }
 
+fn wait(lines: &str) -> IResult<&str, f64> {
+    command_line(preceded(tuple((tag("wait"), multispace0)), double))(lines)
+}
+
+fn start_show(lines: &str) -> IResult<&str, &str> {
+    command_line(tag("start"))(lines)
+}
+
 fn empty(lines: &str) -> IResult<&str, &str> {
     verify(terminated(till_newline0, line_ending), |s: &str| {
         s.trim().is_empty()
     })(lines)
 }
 
-/// skips while the first parser has input. kinda like preceded but runs the first parser until it fails.
-/// maybe this exists in nom already but i didn't find something equivalent
+/// Skips while the first parser has input. Kinda like preceded but runs the first parser until it fails.
+/// Maybe this exists in nom already but i didn't find something equivalent.
 fn skip_while<I, O1, O2, F, S, E>(to_skip: S, parser: F) -> impl FnMut(I) -> IResult<I, O1, E>
 where
     I: Clone + InputLength,
@@ -160,8 +186,16 @@ fn line_block(lines: &str) -> IResult<&str, ScriptEntry> {
     skip_while(empty, line)(lines).map(|(input, line)| (input, ScriptEntry::Line(line.into())))
 }
 
+fn wait_block(lines: &str) -> IResult<&str, ScriptEntry> {
+    skip_while(empty, wait)(lines).map(|(input, wait)| (input, ScriptEntry::Wait(Duration::from_secs_f64(wait))))
+}
+
+fn start_show_block(lines: &str) -> IResult<&str, ScriptEntry> {
+    skip_while(empty, start_show)(lines).map(|(input, _)| (input, ScriptEntry::StartShow))
+}
+
 fn parse_entries(lines: &str) -> IResult<&str, Vec<ScriptEntry>> {
-    many0(alt((prompt_block, line_block)))(lines)
+    many0(alt((prompt_block, wait_block, start_show_block, line_block)))(lines)
 }
 
 #[derive(Debug, Asset, TypePath, PartialEq, Eq)]
@@ -248,13 +282,15 @@ pub enum UpdateRunner {
     ChooseAnswer(usize),
 }
 
-/// triggered on a [`ScriptRunner`] to indicate certain state changes
+/// Triggered (usually on a [`ScriptRunner`]) to indicate certain state changes
 #[derive(Debug, Event)]
 pub enum RunnerUpdated {
     HideChoices,
     ShowChoices,
     Finished,
     NoScript,
+    /// Triggered both on the runner and globally whenever a [`ScriptEntry::StartShow`] is reached
+    StartShow,
 }
 
 // a nicer version of this would have runners/choices automatically add/remove each other with
@@ -265,20 +301,20 @@ pub enum RunnerUpdated {
 pub struct ScriptRunner {
     script: Handle<Script>,
     choices_display: Entity,
-    /// index of the current ScriptEntry
+    /// Index of the current ScriptEntry
     current_entry: usize,
-    /// if this is None, the text currently being displayed is either a single line (if
-    /// `current_entry` refers to a `ScriptEntry::Line`) or a prompt (`current_entry` refers to a
-    /// `ScriptEntry::Prompt`). if `current_entry` refers to a `Prompt` with
-    /// `choices = AnswerBlock::Many(choice_vec)`, this is `Some(i)` where
-    /// `choice_vec[i].response` is the text currently being displayed.
+    /// If `current_entry` refers to a `Prompt` with `choices = AnswerBlock::Many(choice_vec)`, 
+    /// this is `Some(i)` where `choice_vec[i].response` is the text currently being displayed. 
+    /// Otherwise, this should be None.
     current_answer: Option<usize>,
-    /// number of bytes displayed so far
+    /// When `current_entry` refers to a `ScriptEntry::Wait`, this is used to time the wait.
+    wait_timer: Option<Timer>,
+    /// Number of bytes displayed so far
     displayed_bytes: usize,
     display_timer: Timer,
-    /// time since the current line started displaying in timer ticks
+    /// Time since the current line started displaying in timer ticks
     display_ticks: u32,
-    /// the timestamp of the last displayed char in timer ticks
+    /// The timestamp of the last displayed char in timer ticks
     last_displayed_tick: u32,
     finished_line: bool,
 }
@@ -290,6 +326,7 @@ impl ScriptRunner {
             choices_display,
             current_entry: 0,
             current_answer: None,
+            wait_timer: None,
             displayed_bytes: 0,
             display_timer: Timer::new(
                 Duration::from_secs_f32(1. / text_speed),
@@ -302,9 +339,15 @@ impl ScriptRunner {
     }
     pub fn pause(&mut self) {
         self.display_timer.pause();
+        if let Some(wait_timer) = self.wait_timer.as_mut() {
+            wait_timer.pause();
+        }
     }
     pub fn unpause(&mut self) {
         self.display_timer.unpause();
+        if let Some(wait_timer) = self.wait_timer.as_mut() {
+            wait_timer.unpause();
+        }
     }
     pub fn paused(&self) -> bool {
         self.display_timer.paused()
@@ -377,9 +420,11 @@ impl ScriptRunner {
                     runner.finish_line(&text);
                     commands.trigger_targets(RunnerUpdated::ShowChoices, runner.choices_display);
                 }
+                (ScriptEntry::Wait(_), _) | (ScriptEntry::StartShow, _) => {}
                 _ => unreachable!(),
             },
             UpdateRunner::NextLine => match (entry, runner.current_answer) {
+                (ScriptEntry::Wait(_), _) | (ScriptEntry::StartShow, _) => {}
                 (ScriptEntry::Line(_), None) => {
                     runner.current_entry += 1;
                     text.0.clear();
@@ -412,7 +457,10 @@ impl ScriptRunner {
                 _ => unreachable!(),
             },
             &UpdateRunner::ChooseAnswer(index) => match (entry, runner.current_answer) {
-                (_, Some(_)) | (ScriptEntry::Line(_), _) => {}
+                (_, Some(_)) 
+                    | (ScriptEntry::Line(_), _) 
+                    | (ScriptEntry::StartShow, _) 
+                    | (ScriptEntry::Wait(_), _) => {}
                 (
                     ScriptEntry::Prompt {
                         choices: AnswerBlock::Single(_),
@@ -552,9 +600,10 @@ impl ScriptChoices {
                             *root_visibility = Visibility::Inherited;
                         }
                     }
-                    ScriptEntry::Line(_) => {}
+                    ScriptEntry::Line(_) | ScriptEntry::Wait(_) | ScriptEntry::StartShow => {}
                 }
             }
+            RunnerUpdated::StartShow => {}
         }
     }
 }
@@ -574,11 +623,12 @@ impl ScriptChoice {
             .observe(ScriptChoice::on_stop_hover);
     }
     fn on_click(
-        trigger: Trigger<Pointer<Click>>,
+        mut trigger: Trigger<Pointer<Click>>,
         mut commands: Commands,
         choices: Query<(&ScriptChoice, &Parent)>,
         choice_displays: Query<&ScriptChoices>,
     ) {
+        trigger.propagate(false);
         if let Some((i, mut runner_commands)) = choices
             .get(trigger.entity())
             .and_then(|(choice, parent)| Ok((choice.0, choice_displays.get(parent.get())?)))
@@ -602,11 +652,11 @@ impl ScriptChoice {
 
 fn update_script_runner_text(
     mut commands: Commands,
-    mut runners: Query<(&mut ScriptRunner, &mut Text)>,
+    mut runners: Query<(Entity, &mut ScriptRunner, &mut Text)>,
     scripts: Res<Assets<Script>>,
     time: Res<Time>,
 ) {
-    for (mut runner, mut text) in runners.iter_mut() {
+    'runners: for (runner_entity, mut runner, mut text) in runners.iter_mut() {
         let runner = &mut *runner;
         runner.display_ticks += runner
             .display_timer
@@ -616,67 +666,88 @@ fn update_script_runner_text(
         let Some(script) = scripts.get(runner.script.id()) else {
             continue;
         };
-        let Some(entry) = script.get_entry(runner.current_entry) else {
-            continue;
-        };
-        let current_answer = runner.current_answer;
-        let mut extend_text = |s: &str| {
-            let mut new_bytes = 0;
-            // oh no
-            text.0.extend(
-                s[runner.displayed_bytes..]
-                    .chars()
-                    .map(|c| match c {
-                        '.' | '?' | '-' | '!' => (c, 6),
-                        ',' => (c, 3),
-                        _ => (c, 1),
-                    })
-                    .take_while(|(_, ticks)| {
-                        if runner.last_displayed_tick < runner.display_ticks {
-                            runner.last_displayed_tick += ticks;
-                            true
-                        } else {
-                            false
-                        }
-                    })
-                    .map(|(c, _)| {
-                        new_bytes += c.len_utf8();
-                        c
-                    }),
-            );
-            runner.displayed_bytes += new_bytes;
-        };
-        let text_len;
-        let currently_prompt;
-        match (entry, current_answer) {
-            (ScriptEntry::Line(line), None) => {
-                extend_text(line);
-                text_len = line.as_bytes().len();
-                currently_prompt = false;
+        // this loop is only really necessary so StartShow entries don't cost any frames to process
+        loop {
+            let Some(entry) = script.get_entry(runner.current_entry) else {
+                continue 'runners;
+            };
+            let current_answer = runner.current_answer;
+            let mut extend_text = |s: &str| {
+                let mut new_bytes = 0;
+                // oh no
+                text.0.extend(
+                    s[runner.displayed_bytes..]
+                        .chars()
+                        .map(|c| match c {
+                            '.' | '?' | '-' | '!' => (c, 6),
+                            ',' => (c, 3),
+                            _ => (c, 1),
+                        })
+                        .take_while(|(_, ticks)| {
+                            if runner.last_displayed_tick < runner.display_ticks {
+                                runner.last_displayed_tick += ticks;
+                                true
+                            } else {
+                                false
+                            }
+                        })
+                        .map(|(c, _)| {
+                            new_bytes += c.len_utf8();
+                            c
+                        }),
+                );
+                runner.displayed_bytes += new_bytes;
+            };
+            let text_len;
+            let currently_prompt;
+            match (entry, current_answer) {
+                (ScriptEntry::Line(line), None) => {
+                    extend_text(line);
+                    text_len = line.as_bytes().len();
+                    currently_prompt = false;
+                }
+                (ScriptEntry::Prompt { prompt, .. }, None) => {
+                    extend_text(prompt);
+                    text_len = prompt.as_bytes().len();
+                    currently_prompt = true;
+                }
+                (
+                    ScriptEntry::Prompt {
+                        choices: AnswerBlock::Many(answers),
+                        ..
+                    },
+                    Some(answer_index),
+                ) => {
+                    extend_text(&answers[answer_index].response);
+                    text_len = answers[answer_index].response.as_bytes().len();
+                    currently_prompt = false;
+                }
+                (ScriptEntry::Wait(wait), _) => {
+                    let wait_timer = runner.wait_timer.get_or_insert_with(|| Timer::new(*wait, TimerMode::Once));
+                    if wait_timer.tick(time.delta()).finished() {
+                        runner.wait_timer = None;
+                        runner.current_entry += 1;
+                        runner.reset_display();
+                    }
+                    // this shouldn't deal with text_len or currently_prompt at all
+                    break;
+                }
+                (ScriptEntry::StartShow, _) => {
+                    commands.trigger(RunnerUpdated::StartShow);
+                    commands.trigger_targets(RunnerUpdated::StartShow, runner_entity);
+                    runner.current_entry += 1;
+                    runner.reset_display();
+                    continue;
+                }
+                _ => unreachable!(),
             }
-            (ScriptEntry::Prompt { prompt, .. }, None) => {
-                extend_text(prompt);
-                text_len = prompt.as_bytes().len();
-                currently_prompt = true;
+            if runner.displayed_bytes >= text_len && !runner.is_line_finished() {
+                runner.finish_line(&text.0);
+                if currently_prompt {
+                    commands.trigger_targets(RunnerUpdated::ShowChoices, runner.choices_display);
+                }
             }
-            (
-                ScriptEntry::Prompt {
-                    choices: AnswerBlock::Many(answers),
-                    ..
-                },
-                Some(answer_index),
-            ) => {
-                extend_text(&answers[answer_index].response);
-                text_len = answers[answer_index].response.as_bytes().len();
-                currently_prompt = false;
-            }
-            _ => unreachable!(),
-        }
-        if runner.displayed_bytes >= text_len && !runner.is_line_finished() {
-            runner.finish_line(&text.0);
-            if currently_prompt {
-                commands.trigger_targets(RunnerUpdated::ShowChoices, runner.choices_display);
-            }
+            break;
         }
     }
 }
@@ -693,6 +764,7 @@ fn on_script_reload_reset_runners(
             for (mut runner, mut text) in runners.iter_mut() {
                 if runner.script.id() == *id {
                     runner.reset();
+                    runner.unpause();
                     text.0.clear();
                     commands.trigger_targets(RunnerUpdated::HideChoices, runner.choices_display);
                 }
@@ -808,14 +880,49 @@ mod tests {
     }
 
     #[test]
+    fn wait_blocks_parse() {
+        let to_parse = " \n [ wait 1.0 ]\r\n[wait 0.25]\n [wait 10]\t \r\n";
+        assert_eq!(
+            Script::from_raw(to_parse),
+            Ok(Script {
+                raw: to_parse.into(),
+                entries: vec![
+                    ScriptEntry::Wait(Duration::from_secs_f64(1.)),
+                    ScriptEntry::Wait(Duration::from_secs_f64(0.25)),
+                    ScriptEntry::Wait(Duration::from_secs_f64(10.)),
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn start_show_blocks_parse() {
+        let to_parse = "  [ start ]\r\n[start  ]\n [ start ] \t \r\n";
+        assert_eq!(
+            Script::from_raw(to_parse),
+            Ok(Script {
+                raw: to_parse.into(),
+                entries: vec![
+                    ScriptEntry::StartShow,
+                    ScriptEntry::StartShow,
+                    ScriptEntry::StartShow,
+                ]
+            })
+        );
+    }
+
+    #[test]
     fn mixed_blocks_parse() {
-        let to_parse = "line 1\n> prompt \r\n-   answer\n response  \r\n line 2\n \n line 3 \r\n";
+        let to_parse = "line 1\r\n\t[wait1]\t\n\n[start  \t]\n\n [   wait 120. ]  \n\n> prompt \r\n-   answer\n response  \r\n line 2\n \n [ start\t]  \r\n line 3 \r\n";
         assert_eq!(
             Script::from_raw(to_parse),
             Ok(Script {
                 raw: to_parse.into(),
                 entries: vec![
                     ScriptEntry::Line("line 1".into()),
+                    ScriptEntry::Wait(Duration::from_secs_f64(1.0)),
+                    ScriptEntry::StartShow,
+                    ScriptEntry::Wait(Duration::from_secs_f64(120.0)),
                     ScriptEntry::Prompt {
                         prompt: "prompt".into(),
                         choices: AnswerBlock::Many(vec![Answer {
@@ -825,6 +932,7 @@ mod tests {
                         }])
                     },
                     ScriptEntry::Line("line 2".into()),
+                    ScriptEntry::StartShow,
                     ScriptEntry::Line("line 3".into()),
                 ]
             })

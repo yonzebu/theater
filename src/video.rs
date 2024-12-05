@@ -1055,7 +1055,7 @@ fn update_receivers_from_players<R: ReceiveFrame + Component>(
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use crate::video::InterleaveChannels;
 
     #[test]

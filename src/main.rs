@@ -12,7 +12,7 @@ use debug::*;
 use screen_light::{
     ScreenLight, ScreenLightExtension, ScreenLightExtensionPlugin, ScreenLightPlugin,
 };
-use script::{ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner};
+use script::{RunnerUpdated, ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner};
 use video::{VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream, VideoStreamSettings};
 mod screen_light;
 mod script;
@@ -61,6 +61,7 @@ where
 
 #[derive(Component)]
 #[component(on_add = WaitingForLoads::on_add)]
+#[component(on_remove = WaitingForLoads::on_remove)]
 struct WaitingForLoads;
 
 impl WaitingForLoads {
@@ -72,6 +73,11 @@ impl WaitingForLoads {
                 .commands()
                 .entity(entity)
                 .insert(Visibility::Hidden);
+        }
+    }
+    fn on_remove(mut deferred_world: DeferredWorld, entity: Entity, _: ComponentId) {
+        if let Some(mut visibility) = deferred_world.get_mut::<Visibility>(entity) {
+            *visibility = Visibility::Inherited;
         }
     }
 }
@@ -223,7 +229,7 @@ fn setup(
     let script = assets.load("nonfinal/testscript.txt");
     let script_choices_entity = commands.spawn_empty().id();
     let mut script_runner = ScriptRunner::new(script.clone(), script_choices_entity, 10.0);
-    script_runner.pause();
+    // script_runner.pause();
     let root = commands
         .spawn((
             Node {
@@ -402,17 +408,14 @@ fn check_loaded_state(
     mut commands: Commands,
     assets: Res<AssetServer>,
     to_load: Option<Res<AssetsToLoad>>,
-    mut waiting_for_load: Query<(Entity, Option<&mut Visibility>), With<WaitingForLoads>>,
+    mut waiting_for_load: Query<Entity, With<WaitingForLoads>>,
 ) {
     let Some(to_load) = to_load else {
         return;
     };
     if to_load.0.iter().all(|id| assets.is_loaded(*id)) {
-        for (waiting, visibility) in waiting_for_load.iter_mut() {
+        for waiting in waiting_for_load.iter_mut() {
             commands.entity(waiting).remove::<WaitingForLoads>();
-            if let Some(mut visibility) = visibility {
-                *visibility = Visibility::Inherited;
-            }
         }
         commands.remove_resource::<AssetsToLoad>();
     }
@@ -453,12 +456,11 @@ fn main() {
                 update_video_player,
             ),
         )
-        // .add_systems(
-        //     Last,
-        //     (
-        //         debug_events::<AssetEvent<StandardMaterial>>(),
-        //         debug_events::<AssetEvent<Scene>>(),
-        //     )
-        // )
+        .add_systems(
+            Last,
+            (
+                debug_events::<RunnerUpdated>(),
+            )
+        )
         .run();
 }
