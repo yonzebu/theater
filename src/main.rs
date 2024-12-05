@@ -19,6 +19,48 @@ mod screen_light;
 mod script;
 mod video;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, States)]
+enum GameState {
+    Loading(Progress),
+    Active(Progress),
+    // Paused(Progress)
+}
+
+impl Default for GameState {
+    fn default() -> Self {
+        GameState::Loading(Progress::Start)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, States)]
+enum Progress {
+    #[default]
+    Start,
+    Entering,
+    Preshow,
+    Show,
+    EarlyLeave,
+    Postshow,
+    Leaving,
+    End,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum LoadState {
+    Loading,
+    Loaded,
+}
+
+impl ComputedStates for LoadState {
+    type SourceStates = GameState;
+    fn compute(sources: Self::SourceStates) -> Option<Self> {
+        match sources {
+            GameState::Active(_) => Some(LoadState::Loaded),
+            GameState::Loading(_) => Some(LoadState::Loading),
+        }
+    }
+}
+
 #[derive(Clone, Asset, TypePath, AsBindGroup)]
 struct Paper {}
 
@@ -94,10 +136,10 @@ fn setup(
     commands.spawn((Camera3d::default(), Transform::from_xyz(0., 2., 5.)));
     // commands.spawn((PointLight::default(), Transform::from_xyz(0., 0., -9.)));
     let video_stream = assets.load_with_settings(
-        "nonfinal/testshow.mp4", 
+        "nonfinal/testshow.mp4",
         |settings: &mut VideoStreamSettings| {
             settings.use_mips = false;
-        }
+        },
     );
     // commands.spawn((
     //     AudioPlayer(video_stream.clone()),
@@ -357,10 +399,12 @@ fn update_chair_materials(
     >,
     screen_light: Query<Entity, With<ScreenLight>>,
     mut to_load: ResMut<AssetsToLoad>,
-    mut found_materials: Local<HashMap<
-        AssetId<StandardMaterial>, 
-        Handle<ExtendedMaterial<StandardMaterial, ScreenLightExtension>>
-    >>,
+    mut found_materials: Local<
+        HashMap<
+            AssetId<StandardMaterial>,
+            Handle<ExtendedMaterial<StandardMaterial, ScreenLightExtension>>,
+        >,
+    >,
 ) {
     let Ok(screen_light) = screen_light.get_single() else {
         return;
@@ -420,16 +464,26 @@ fn update_video_player(
 }
 
 fn check_loaded_state(
-    mut commands: Commands,
     assets: Res<AssetServer>,
     mut to_load: ResMut<AssetsToLoad>,
-    mut waiting_for_load: Query<Entity, With<WaitingForLoads>>,
+    game_state: Res<State<GameState>>,
+    mut next_game_state: ResMut<NextState<GameState>>,
 ) {
-    to_load.retain(|&id| assets.is_loaded(id));
+    to_load.retain(|&id| !assets.is_loaded(id));
     if to_load.len() == 0 {
-        for waiting in waiting_for_load.iter_mut() {
-            commands.entity(waiting).remove::<WaitingForLoads>();
+        match game_state.get() {
+            &GameState::Loading(progress) => next_game_state.set(GameState::Active(progress)),
+            _ => {}
         }
+    }
+}
+
+fn remove_waiting_for_loads(
+    mut commands: Commands,
+    waiting_for_loads: Query<Entity, With<WaitingForLoads>>,
+) {
+    for waiting in waiting_for_loads.iter() {
+        commands.entity(waiting).remove::<WaitingForLoads>();
     }
 }
 
@@ -458,21 +512,28 @@ fn main() {
             ScriptPlugin,
             ScreenLightPlugin,
         ))
+        .init_state::<GameState>()
+        .add_computed_state::<LoadState>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
             (
-                (update_chair_materials,
-                check_loaded_state,).chain(),
+                (
+                    update_chair_materials,
+                    check_loaded_state.run_if(in_state(LoadState::Loading)),
+                )
+                    .chain(),
                 update,
                 update_video_player,
             ),
         )
         .add_systems(
-            Last,
-            (
-                debug_events::<RunnerUpdated>(),
-            )
+            OnTransition {
+                exited: LoadState::Loading,
+                entered: LoadState::Loaded,
+            },
+            remove_waiting_for_loads,
         )
+        .add_systems(Last, (debug_events::<RunnerUpdated>(),))
         .run();
 }

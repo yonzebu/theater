@@ -6,7 +6,15 @@ use bevy::{
     prelude::*,
 };
 use nom::{
-    branch::alt, bytes::complete::{tag, take_till, take_till1}, character::complete::{line_ending, multispace0}, combinator::{eof, peek, verify}, error::ParseError, multi::{fold_many0, many0}, number::complete::double, sequence::{delimited, preceded, terminated, tuple}, IResult, InputLength, Parser
+    branch::alt,
+    bytes::complete::{tag, take_till, take_till1},
+    character::complete::{line_ending, multispace0},
+    combinator::{eof, peek, verify},
+    error::ParseError,
+    multi::{fold_many0, many0},
+    number::complete::double,
+    sequence::{delimited, preceded, terminated, tuple},
+    IResult, InputLength, Parser,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,34 +68,34 @@ fn line_starter<'a>(starter: &'a str) -> impl FnMut(&'a str) -> IResult<&'a str,
     preceded(multispace0, tag(starter))
 }
 
-fn till_newline0<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E> 
+fn till_newline0<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
     E: ParseError<&'a str>,
 {
     take_till(|c| c == '\r' || c == '\n')(input)
 }
 
-fn till_newline1<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E> 
+fn till_newline1<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
 where
     E: ParseError<&'a str>,
 {
     take_till1(|c| c == '\r' || c == '\n')(input)
 }
 
-fn command_line<'a, F, O, E>(f: F) -> impl FnMut(&'a str) -> IResult<&'a str, O, E> 
+fn command_line<'a, F, O, E>(f: F) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
 where
     F: Parser<&'a str, O, E>,
     E: ParseError<&'a str>,
 {
     delimited(
-        tuple((multispace0, tag("["), multispace0)), 
-        f, 
+        tuple((multispace0, tag("["), multispace0)),
+        f,
         tuple((
-            multispace0, 
-            tag("]"), 
-            verify(till_newline0, |s: &str| s.trim().is_empty()), 
+            multispace0,
+            tag("]"),
+            verify(till_newline0, |s: &str| s.trim().is_empty()),
             Parser::or(line_ending, eof),
-        ))
+        )),
     )
 }
 
@@ -187,7 +195,8 @@ fn line_block(lines: &str) -> IResult<&str, ScriptEntry> {
 }
 
 fn wait_block(lines: &str) -> IResult<&str, ScriptEntry> {
-    skip_while(empty, wait)(lines).map(|(input, wait)| (input, ScriptEntry::Wait(Duration::from_secs_f64(wait))))
+    skip_while(empty, wait)(lines)
+        .map(|(input, wait)| (input, ScriptEntry::Wait(Duration::from_secs_f64(wait))))
 }
 
 fn start_show_block(lines: &str) -> IResult<&str, ScriptEntry> {
@@ -195,7 +204,12 @@ fn start_show_block(lines: &str) -> IResult<&str, ScriptEntry> {
 }
 
 fn parse_entries(lines: &str) -> IResult<&str, Vec<ScriptEntry>> {
-    many0(alt((prompt_block, wait_block, start_show_block, line_block)))(lines)
+    many0(alt((
+        prompt_block,
+        wait_block,
+        start_show_block,
+        line_block,
+    )))(lines)
 }
 
 #[derive(Debug, Asset, TypePath, PartialEq, Eq)]
@@ -303,8 +317,8 @@ pub struct ScriptRunner {
     choices_display: Entity,
     /// Index of the current ScriptEntry
     current_entry: usize,
-    /// If `current_entry` refers to a `Prompt` with `choices = AnswerBlock::Many(choice_vec)`, 
-    /// this is `Some(i)` where `choice_vec[i].response` is the text currently being displayed. 
+    /// If `current_entry` refers to a `Prompt` with `choices = AnswerBlock::Many(choice_vec)`,
+    /// this is `Some(i)` where `choice_vec[i].response` is the text currently being displayed.
     /// Otherwise, this should be None.
     current_answer: Option<usize>,
     /// When `current_entry` refers to a `ScriptEntry::Wait`, this is used to time the wait.
@@ -456,10 +470,10 @@ impl ScriptRunner {
                 _ => unreachable!(),
             },
             &UpdateRunner::ChooseAnswer(index) => match (entry, runner.current_answer) {
-                (_, Some(_)) 
-                    | (ScriptEntry::Line(_), _) 
-                    | (ScriptEntry::StartShow, _) 
-                    | (ScriptEntry::Wait(_), _) => {}
+                (_, Some(_))
+                | (ScriptEntry::Line(_), _)
+                | (ScriptEntry::StartShow, _)
+                | (ScriptEntry::Wait(_), _) => {}
                 (
                     ScriptEntry::Prompt {
                         choices: AnswerBlock::Single(_),
@@ -722,7 +736,9 @@ fn update_script_runner_text(
                     currently_prompt = false;
                 }
                 (ScriptEntry::Wait(wait), _) => {
-                    let wait_timer = runner.wait_timer.get_or_insert_with(|| Timer::new(*wait, TimerMode::Once));
+                    let wait_timer = runner
+                        .wait_timer
+                        .get_or_insert_with(|| Timer::new(*wait, TimerMode::Once));
                     if wait_timer.tick(time.delta()).finished() {
                         runner.wait_timer = None;
                         runner.current_entry += 1;

@@ -1,5 +1,5 @@
 //! This is held together by glue and toothpicks.
-//! 
+//!
 //! It's not really intended to be used outside of this project, and has a lot of problems that were
 //! solved with the most convenient thing at the time and never got changed to something "better"
 //! because it was never needed. There are several rendering features that will probably break this
@@ -14,13 +14,20 @@ use bevy::ecs::entity::EntityHashMap;
 use bevy::ecs::system::lifetimeless::{Read, SQuery, SRes};
 use bevy::ecs::system::SystemParamItem;
 use bevy::pbr::{
-    prepare_lights, queue_material_meshes, queue_shadows, DrawPrepass, ExtendedMaterial, LightViewEntities, MaterialPipeline, MaterialPipelineKey, MeshPipelineKey, NotShadowCaster, PreparedMaterial, PrepassPipeline, PrepassPipelinePlugin, PrepassPlugin, RenderLightmaps, RenderMaterialInstances, RenderMeshInstanceFlags, RenderMeshInstances, RenderVisibleMeshEntities, Shadow, ShadowBinKey, ShadowView, SimulationLightSystems, ViewLightEntities, VisibleMeshEntities
+    prepare_lights, queue_material_meshes, queue_shadows, DrawPrepass, ExtendedMaterial,
+    LightViewEntities, MaterialPipeline, MaterialPipelineKey, MeshPipelineKey, NotShadowCaster,
+    PreparedMaterial, PrepassPipeline, PrepassPipelinePlugin, PrepassPlugin, RenderLightmaps,
+    RenderMaterialInstances, RenderMeshInstanceFlags, RenderMeshInstances,
+    RenderVisibleMeshEntities, Shadow, ShadowBinKey, ShadowView, SimulationLightSystems,
+    ViewLightEntities, VisibleMeshEntities,
 };
 use bevy::render::camera::CameraProjection;
 use bevy::render::mesh::RenderMesh;
 use bevy::render::primitives::{Aabb, Frustum};
 use bevy::render::render_asset::{prepare_assets, RenderAssetPlugin, RenderAssets};
-use bevy::render::render_phase::{AddRenderCommand, BinnedRenderPhaseType, DrawFunctions, ViewBinnedRenderPhases};
+use bevy::render::render_phase::{
+    AddRenderCommand, BinnedRenderPhaseType, DrawFunctions, ViewBinnedRenderPhases,
+};
 use bevy::render::render_resource::binding_types::{
     sampler, texture_2d, texture_depth_2d, uniform_buffer,
 };
@@ -207,28 +214,26 @@ pub struct ScreenLightPlugin;
 
 impl Plugin for ScreenLightPlugin {
     fn build(&self, app: &mut App) {
-        app
-            .add_plugins((
-                SyncComponentPlugin::<ScreenLight>::default(), 
-                ScreenLightExtensionPlugin::<StandardMaterial>::default()
-            ))
-            .add_systems(
-                PostUpdate,
-                (
-                    update_screen_light_frusta
-                        .in_set(SimulationLightSystems::UpdateLightFrusta)
-                        .after(TransformSystem::TransformPropagate)
-                        .after(SimulationLightSystems::AssignLightsToClusters),
-                    check_visibility::<With<ScreenLight>>
-                        .in_set(VisibilitySystems::CheckVisibility),
-                    check_screen_light_mesh_visibility
-                        .in_set(SimulationLightSystems::CheckLightVisibility)
-                        .after(VisibilitySystems::CalculateBounds)
-                        .after(TransformSystem::TransformPropagate)
-                        .after(SimulationLightSystems::UpdateLightFrusta)
-                        .after(VisibilitySystems::CheckVisibility),
-                ),
-            );
+        app.add_plugins((
+            SyncComponentPlugin::<ScreenLight>::default(),
+            ScreenLightExtensionPlugin::<StandardMaterial>::default(),
+        ))
+        .add_systems(
+            PostUpdate,
+            (
+                update_screen_light_frusta
+                    .in_set(SimulationLightSystems::UpdateLightFrusta)
+                    .after(TransformSystem::TransformPropagate)
+                    .after(SimulationLightSystems::AssignLightsToClusters),
+                check_visibility::<With<ScreenLight>>.in_set(VisibilitySystems::CheckVisibility),
+                check_screen_light_mesh_visibility
+                    .in_set(SimulationLightSystems::CheckLightVisibility)
+                    .after(VisibilitySystems::CalculateBounds)
+                    .after(TransformSystem::TransformPropagate)
+                    .after(SimulationLightSystems::UpdateLightFrusta)
+                    .after(VisibilitySystems::CheckVisibility),
+            ),
+        );
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
@@ -280,7 +285,7 @@ impl Plugin for ScreenLightPlugin {
 /// without adding any other passes.
 struct MaterialPluginOnlyShadow<M: Material> {
     prepass_enabled: bool,
-    _marker: PhantomData<M>
+    _marker: PhantomData<M>,
 }
 
 impl<M: Material> Default for MaterialPluginOnlyShadow<M> {
@@ -292,9 +297,9 @@ impl<M: Material> Default for MaterialPluginOnlyShadow<M> {
     }
 }
 
-impl<M: Material> Plugin for MaterialPluginOnlyShadow<M> 
-where 
-    M::Data: Clone + Eq + Hash
+impl<M: Material> Plugin for MaterialPluginOnlyShadow<M>
+where
+    M::Data: Clone + Eq + Hash,
 {
     fn build(&self, app: &mut App) {
         app.init_asset::<M>()
@@ -336,14 +341,14 @@ where
 /// of this plugin for [`StandardMaterial`], so you don't need to manually add it.
 pub struct ScreenLightExtensionPlugin<M: Material> {
     // pub prepass_enabled: bool,
-    pub _marker: PhantomData<M>
+    pub _marker: PhantomData<M>,
 }
 
 impl<M: Material> Default for ScreenLightExtensionPlugin<M> {
     fn default() -> Self {
         ScreenLightExtensionPlugin {
             // prepass_enabled: true,
-            _marker: PhantomData
+            _marker: PhantomData,
         }
     }
 }
@@ -353,13 +358,12 @@ where
     M::Data: PartialEq + Eq + Hash + Clone,
 {
     fn build(&self, app: &mut App) {
-        app
-            .init_resource::<ExtendedToPrepass<M>>()
+        app.init_resource::<ExtendedToPrepass<M>>()
             .add_systems(
                 PostUpdate,
                 (
                     update_screen_light_materials::<M>.after(update_screen_light_frusta),
-                    update_screen_light_prepass_extensions::<M>
+                    update_screen_light_prepass_extensions::<M>,
                 ),
             )
             .add_plugins((
@@ -370,23 +374,20 @@ where
                 },
                 MaterialPluginOnlyShadow::<PrepassExt<M>> {
                     prepass_enabled: false,
-                    _marker: PhantomData
-                }
+                    _marker: PhantomData,
+                },
             ))
             .add_observer(on_remove_screen_light_extension::<M>);
-
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };
-        
+
         render_app.add_systems(
             Render,
-            (
-                queue_screen_light_shadows::<PrepassExt<M>>
-                    .in_set(RenderSet::QueueMeshes)
-                    .after(prepare_assets::<PreparedMaterial<PrepassExt<M>>>),
-            ),
+            (queue_screen_light_shadows::<PrepassExt<M>>
+                .in_set(RenderSet::QueueMeshes)
+                .after(prepare_assets::<PreparedMaterial<PrepassExt<M>>>),),
         );
     }
 }
@@ -407,10 +408,17 @@ struct WithPrepassExt<M: Material> {
 
 fn update_screen_light_prepass_extensions<M: Material>(
     mut commands: Commands,
-    without_prepass: Query<(Entity, &MeshMaterial3d<Extended<M>>), Without<MeshMaterial3d<PrepassExt<M>>>>,
+    without_prepass: Query<
+        (Entity, &MeshMaterial3d<Extended<M>>),
+        Without<MeshMaterial3d<PrepassExt<M>>>,
+    >,
     mut changed: Query<
-        (&MeshMaterial3d<Extended<M>>, &mut MeshMaterial3d<PrepassExt<M>>, &mut WithPrepassExt<M>), 
-        Changed<MeshMaterial3d<Extended<M>>>
+        (
+            &MeshMaterial3d<Extended<M>>,
+            &mut MeshMaterial3d<PrepassExt<M>>,
+            &mut WithPrepassExt<M>,
+        ),
+        Changed<MeshMaterial3d<Extended<M>>>,
     >,
     materials: Res<Assets<Extended<M>>>,
     mut prepass_materials: ResMut<Assets<PrepassExt<M>>>,
@@ -420,8 +428,10 @@ fn update_screen_light_prepass_extensions<M: Material>(
         if let Some(&prepass_id) = extended_to_prepass.get(&material.id()) {
             if let Some(prepass_handle) = prepass_materials.get_strong_handle(prepass_id) {
                 commands.entity(entity).insert((
-                    MeshMaterial3d(prepass_handle), 
-                    WithPrepassExt { old_material: material.0.clone() }
+                    MeshMaterial3d(prepass_handle),
+                    WithPrepassExt {
+                        old_material: material.0.clone(),
+                    },
                 ));
                 continue;
             } else {
@@ -432,17 +442,19 @@ fn update_screen_light_prepass_extensions<M: Material>(
         if let Some(extended) = materials.get(material.id()) {
             let prepass_handle = prepass_materials.add(ExtendedMaterial {
                 base: extended.base.clone(),
-                extension: ScreenLightPrepassExtension {}
+                extension: ScreenLightPrepassExtension {},
             });
             let prepass_id = prepass_handle.id();
             commands.entity(entity).insert((
-                MeshMaterial3d(prepass_handle), 
-                WithPrepassExt { old_material: material.0.clone() }
+                MeshMaterial3d(prepass_handle),
+                WithPrepassExt {
+                    old_material: material.0.clone(),
+                },
             ));
             extended_to_prepass.insert(material.id(), prepass_id);
         }
     }
-    
+
     for (MeshMaterial3d(new_handle), mut prepass_ext, mut old_material) in changed.iter_mut() {
         let old_handle = std::mem::replace(&mut old_material.old_material, new_handle.clone());
         let old_id = old_handle.id();
@@ -483,7 +495,7 @@ fn on_remove_screen_light_extension<M: Material>(
     mut extended_to_prepass: ResMut<ExtendedToPrepass<M>>,
     materials: Res<Assets<Extended<M>>>,
 ) {
-    if let Some(mut entity_commands) =  commands.get_entity(trigger.entity()) {
+    if let Some(mut entity_commands) = commands.get_entity(trigger.entity()) {
         entity_commands.remove::<(MeshMaterial3d<PrepassExt<M>>, WithPrepassExt<M>)>();
     }
     if let Ok(mut with_prepass_ext) = with_prepass_exts.get_mut(trigger.entity()) {
@@ -519,7 +531,13 @@ fn extract_mesh_materials<M: Material>(
 }
 
 fn update_screen_light_materials<M: Material>(
-    screen_lights: Query<Entity, (With<ScreenLight>, Or<(Changed<ScreenLight>, Changed<Frustum>)>)>,
+    screen_lights: Query<
+        Entity,
+        (
+            With<ScreenLight>,
+            Or<(Changed<ScreenLight>, Changed<Frustum>)>,
+        ),
+    >,
     materials: Res<Assets<Extended<M>>>,
     mut asset_events: EventWriter<AssetEvent<Extended<M>>>,
 ) {
