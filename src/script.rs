@@ -418,7 +418,6 @@ impl ScriptRunner {
                     };
                     text.0.clone_from(response);
                     runner.finish_line(&text);
-                    commands.trigger_targets(RunnerUpdated::ShowChoices, runner.choices_display);
                 }
                 (ScriptEntry::Wait(_), _) | (ScriptEntry::StartShow, _) => {}
                 _ => unreachable!(),
