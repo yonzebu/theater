@@ -19,19 +19,6 @@ mod screen_light;
 mod script;
 mod video;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, States)]
-enum GameState {
-    Loading(Progress),
-    Active(Progress),
-    // Paused(Progress)
-}
-
-impl Default for GameState {
-    fn default() -> Self {
-        GameState::Loading(Progress::Start)
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, States)]
 enum Progress {
     #[default]
@@ -45,21 +32,8 @@ enum Progress {
     End,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum LoadState {
-    Loading,
-    Loaded,
-}
-
-impl ComputedStates for LoadState {
-    type SourceStates = GameState;
-    fn compute(sources: Self::SourceStates) -> Option<Self> {
-        match sources {
-            GameState::Active(_) => Some(LoadState::Loaded),
-            GameState::Loading(_) => Some(LoadState::Loading),
-        }
-    }
-}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, States, Deref, DerefMut)]
+struct Loaded(bool);
 
 #[derive(Clone, Asset, TypePath, AsBindGroup)]
 struct Paper {}
@@ -80,6 +54,22 @@ struct Chair;
 #[derive(Component)]
 #[component(storage = "SparseSet")]
 struct Screen;
+
+#[derive(Component)]
+#[component(storage = "SparseSet")]
+struct UiRoot;
+
+#[derive(Component)]
+#[component(storage = "SparseSet")]
+struct TheaterUiRoot;
+
+#[derive(Component)]
+#[component(storage = "SparseSet")]
+struct StartUiRoot;
+
+#[derive(Component)]
+#[component(storage = "SparseSet")]
+struct StartButton;
 
 const CHAIR_ROWS: i32 = 5;
 const CHAIR_COLS: i32 = 5;
@@ -288,10 +278,64 @@ fn setup(
     let script = assets.load("nonfinal/testscript.txt");
     let script_choices_entity = commands.spawn_empty().id();
     let mut script_runner = ScriptRunner::new(script.clone(), script_choices_entity, 10.0);
-    // script_runner.pause();
-    let root = commands
+    script_runner.pause();
+    let root = commands.spawn((
+        Node {
+            align_self: AlignSelf::Stretch,
+            justify_self: JustifySelf::Stretch,
+            flex_wrap: FlexWrap::NoWrap,
+            justify_content: JustifyContent::Stretch,
+            align_items: AlignItems::Stretch,
+            align_content: AlignContent::Stretch,
+            width: Val::Vw(100.),
+            height: Val::Vh(100.),
+            ..default()
+        },
+        UiRoot,
+    )).id();
+
+    // start ui
+    let start_screen = commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            align_self: AlignSelf::Stretch,
+            justify_self: JustifySelf::Stretch,
+            justify_content: JustifyContent::Center,
+            justify_items: JustifyItems::Center,
+            align_content: AlignContent::Center,
+            align_items: AlignItems::Center,
+            width: Val::Vw(100.),
+            height: Val::Vh(100.),
+            ..default()
+        },
+        BackgroundColor(Color::linear_rgb(0.286, 0., 0.4)),
+        Visibility::Inherited,
+        StartUiRoot,
+    )).id();
+    let start_text = commands.spawn((
+        Node {
+            align_self: AlignSelf::Center,
+            justify_self: JustifySelf::Center,
+            ..default()
+        },
+        Text("loading...".into()),
+        TextFont {
+            font_size: 50.,
+            ..default()
+        },
+        Button,
+        StartButton,
+    )).id();
+    commands.entity(start_screen).observe(on_start_clicked);
+    commands.entity(start_text).observe(on_start_clicked);
+    commands.entity(root).add_child(start_screen);
+    commands.entity(start_screen).add_child(start_text);
+
+    // theater ui
+    let theater_root = commands
         .spawn((
             Node {
+                position_type: PositionType::Absolute,
                 flex_direction: FlexDirection::ColumnReverse,
                 align_self: AlignSelf::Stretch,
                 justify_self: JustifySelf::Stretch,
@@ -299,19 +343,23 @@ fn setup(
                 justify_content: JustifyContent::FlexStart,
                 align_items: AlignItems::End,
                 align_content: AlignContent::Center,
+                width: Val::Vw(100.),
+                height: Val::Vh(100.),
                 padding: UiRect::horizontal(Val::VMin(30.)).with_bottom(Val::VMin(1.)),
                 ..default()
             },
-            Visibility::Inherited,
+            Visibility::Hidden,
+            TheaterUiRoot,
         ))
         .id();
+
     let text_box_wrapper = commands
         .spawn((Node {
             align_self: AlignSelf::Stretch,
             height: Val::Percent(20.),
             margin: UiRect::horizontal(Val::VMin(5.)),
             ..default()
-        },))
+        }, ))
         .id();
     let text_visible_box = commands
         .spawn((
@@ -339,7 +387,8 @@ fn setup(
             script_runner,
         ))
         .id();
-    commands.entity(root).add_child(text_box_wrapper);
+    commands.entity(root).add_child(theater_root);
+    commands.entity(theater_root).add_child(text_box_wrapper);
     commands
         .entity(text_box_wrapper)
         .add_child(text_visible_box);
@@ -367,7 +416,7 @@ fn setup(
         BackgroundColor(Color::srgba(0.8, 0.43, 1., 0.5)),
         ScriptChoices::new(script_runner, choice_box_wrapper),
     ));
-    commands.entity(root).add_child(choice_box_wrapper);
+    commands.entity(theater_root).add_child(choice_box_wrapper);
     commands
         .entity(choice_box_wrapper)
         .add_child(script_choices_entity);
@@ -381,6 +430,22 @@ fn setup(
         script.id().untyped(),
     ]));
     commands.insert_resource(ScreenOffImage(screen_off_image));
+}
+
+fn on_start_clicked(
+    trigger: Trigger<Pointer<Click>>,
+    mut commands: Commands,
+    loaded: Res<State<Loaded>>, 
+    progress: Res<State<Progress>>,
+    mut next_progress: ResMut<NextState<Progress>>
+) {
+    if !**loaded.get() {
+        return;
+    }
+    if *progress.get() != Progress::Start {
+        panic!();
+    }
+    next_progress.set(Progress::Entering);
 }
 
 fn on_text_visible_box_clicked(
@@ -552,13 +617,13 @@ fn update_video_player(
 fn check_loaded_state(
     assets: Res<AssetServer>,
     mut to_load: ResMut<AssetsToLoad>,
-    game_state: Res<State<GameState>>,
-    mut next_game_state: ResMut<NextState<GameState>>,
+    loaded: Res<State<Loaded>>,
+    mut next_loaded: ResMut<NextState<Loaded>>,
 ) {
     to_load.retain(|&id| !assets.is_loaded(id));
     if to_load.len() == 0 {
-        if let &GameState::Loading(progress) = game_state.get() {
-            next_game_state.set(GameState::Active(progress));
+        if !**loaded.get() {
+            next_loaded.set(Loaded(true));
         }
     }
 }
@@ -570,6 +635,16 @@ fn remove_waiting_for_loads(
     for waiting in waiting_for_loads.iter() {
         commands.entity(waiting).remove::<WaitingForLoads>();
     }
+}
+
+fn switch_to_theater_ui(
+    mut commands: Commands,
+    start_ui_root: Query<Entity, With<StartUiRoot>>,
+    theater_root: Query<Entity, With<TheaterUiRoot>>,
+) {
+    // i am too lazy to do the Option<&mut Visibility> dance
+    commands.entity(start_ui_root.single()).insert(Visibility::Hidden);
+    commands.entity(theater_root.single()).insert(Visibility::Inherited);
 }
 
 fn update(mut runners: Query<&mut ScriptRunner>, keyboard: Res<ButtonInput<KeyCode>>) {
@@ -597,15 +672,15 @@ fn main() {
             ScriptPlugin,
             ScreenLightPlugin,
         ))
-        .init_state::<GameState>()
-        .add_computed_state::<LoadState>()
+        .init_state::<Progress>()
+        .init_state::<Loaded>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
             (
                 (
                     update_chair_materials,
-                    check_loaded_state.run_if(in_state(LoadState::Loading)),
+                    check_loaded_state.run_if(in_state(Loaded(false))),
                 )
                     .chain(),
                 update,
@@ -613,11 +688,22 @@ fn main() {
             ),
         )
         .add_systems(
-            OnTransition {
-                exited: LoadState::Loading,
-                entered: LoadState::Loaded,
-            },
-            remove_waiting_for_loads,
+            OnEnter(Loaded(true)),
+            (
+                remove_waiting_for_loads, 
+                |mut start_button: Query<&mut Text, With<StartButton>>| { 
+                    start_button.single_mut().replace_range(.., "click anywhere to start");
+                },
+                |mut script_runners: Query<&mut ScriptRunner>| {
+                    for mut runner in script_runners.iter_mut() {
+                        runner.unpause();
+                    }
+                }
+            ),
+        )
+        .add_systems(
+            OnEnter(Progress::Entering),
+            switch_to_theater_ui,
         )
         .add_systems(Last, (debug_events::<RunnerUpdated>(),))
         .run();
