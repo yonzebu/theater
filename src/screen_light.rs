@@ -52,6 +52,9 @@ use bevy::{pbr::MaterialExtension, prelude::*};
 
 use crate::video::ReceiveFrame;
 
+// TODO: make this a Resource?
+const SCREEN_LIGHT_SHADOW_MAP_WIDTH: u32 = 1920;
+
 #[derive(Default, ShaderType, Clone)]
 pub struct ScreenLightUniform {
     clip_from_world: Mat4,
@@ -144,7 +147,6 @@ impl AsBindGroup for ScreenLightExtension {
             .get(&self.light)
             .and_then(|light| screen_lights.get(light.id()).ok())
             .ok_or(AsBindGroupError::RetryNextUpdate)?;
-
         let image = images
             .get(screen_light.image.id())
             .ok_or(AsBindGroupError::RetryNextUpdate)?;
@@ -281,7 +283,7 @@ impl Plugin for ScreenLightPlugin {
     }
 }
 
-/// What it says on the tin. Mostly duplicated from bevy's renderer, but with shadows always on and
+/// What it says on the tin. Mostly duplicated from bevy's MaterialPlugin, but with shadows always on and
 /// without adding any other passes.
 struct MaterialPluginOnlyShadow<M: Material> {
     prepass_enabled: bool,
@@ -535,7 +537,7 @@ fn update_screen_light_materials<M: Material>(
         Entity,
         (
             With<ScreenLight>,
-            Or<(Changed<ScreenLight>, Changed<Frustum>)>,
+            Or<(Added<ScreenLight>, Added<Frustum>, Changed<ScreenLight>, Changed<Frustum>)>,
         ),
     >,
     materials: Res<Assets<Extended<M>>>,
@@ -786,8 +788,8 @@ pub fn prepare_screen_lights(
             TextureDescriptor {
                 label: "screen light shadow map".into(),
                 size: Extent3d {
-                    width: image.texture.width(),
-                    height: image.texture.height(),
+                    width: SCREEN_LIGHT_SHADOW_MAP_WIDTH,
+                    height: (SCREEN_LIGHT_SHADOW_MAP_WIDTH * image.texture.width()) / image.texture.height(),
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,

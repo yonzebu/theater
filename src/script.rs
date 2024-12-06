@@ -62,6 +62,10 @@ pub enum ScriptEntry {
     Line(String),
     Wait(Duration),
     StartShow,
+    /// Realistically no script runner SHOULD ever do anything with this, it's mostly a marker for parsing
+    // maybe it's a good idea to have separate parsed entries vs. actual entries? if i had more time i might
+    // rearchitect it that way
+    OnShowEnd,
 }
 
 fn line_starter<'a>(starter: &'a str) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str> {
@@ -138,6 +142,10 @@ fn start_show(lines: &str) -> IResult<&str, &str> {
     command_line(tag("start"))(lines)
 }
 
+fn on_show_end(lines: &str) -> IResult<&str, &str> {
+    command_line(tag("ended"))(lines)
+}
+
 fn empty(lines: &str) -> IResult<&str, &str> {
     verify(terminated(till_newline0, line_ending), |s: &str| {
         s.trim().is_empty()
@@ -203,19 +211,55 @@ fn start_show_block(lines: &str) -> IResult<&str, ScriptEntry> {
     skip_while(empty, start_show)(lines).map(|(input, _)| (input, ScriptEntry::StartShow))
 }
 
+fn on_show_end_block(lines: &str) -> IResult<&str, ScriptEntry> {
+    skip_while(empty, on_show_end)(lines).map(|(input, _)| (input, ScriptEntry::OnShowEnd))
+}
+
 fn parse_entries(lines: &str) -> IResult<&str, Vec<ScriptEntry>> {
     many0(alt((
         prompt_block,
         wait_block,
         start_show_block,
+        on_show_end_block,
         line_block,
     )))(lines)
+}
+
+fn parse_script(lines: &str) -> IResult<&str, ScriptEntries> {
+    let (extra_input, mut entries) = parse_entries(lines)?;
+    let end_start = entries
+        .iter()
+        .position(|entry| matches!(entry, ScriptEntry::OnShowEnd))
+        .unwrap_or(entries.len());
+    let after_end = entries.split_off(end_start);
+    Ok((
+        extra_input,
+        ScriptEntries {
+            before_end: entries,
+            after_show_end: after_end,
+        },
+    ))
+}
+
+#[derive(Debug, Default, TypePath, PartialEq, Eq)]
+struct ScriptEntries {
+    before_end: Vec<ScriptEntry>,
+    after_show_end: Vec<ScriptEntry>,
+}
+
+impl ScriptEntries {
+    fn from_before_end(entries: impl Into<Vec<ScriptEntry>>) -> Self {
+        ScriptEntries {
+            before_end: entries.into(),
+            after_show_end: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Asset, TypePath, PartialEq, Eq)]
 pub struct Script {
     raw: Cow<'static, str>,
-    entries: Vec<ScriptEntry>,
+    entries: ScriptEntries,
 }
 
 impl Script {
@@ -223,12 +267,16 @@ impl Script {
         raw: impl Into<Cow<'static, str>>,
     ) -> Result<Self, nom::Err<nom::error::Error<String>>> {
         let raw: Cow<'static, str> = raw.into();
-        let (_extra_input, entries) = parse_entries(&raw).map_err(|e| e.map_input(|s| s.into()))?;
+        let (_extra_input, entries) = parse_script(&raw).map_err(|e| e.map_input(|s| s.into()))?;
         Ok(Script { raw, entries })
     }
 
-    pub fn get_entry(&self, index: usize) -> Option<&ScriptEntry> {
-        self.entries.get(index)
+    pub fn get_entry(&self, index: usize, after_show_end: bool) -> Option<&ScriptEntry> {
+        if after_show_end {
+            self.entries.after_show_end.get(index)
+        } else {
+            self.entries.before_end.get(index)
+        }
     }
 }
 
@@ -286,7 +334,7 @@ impl AssetLoader for ScriptLoader {
 }
 
 /// triggered on a [`ScriptRunner`] to update its state in some way
-#[derive(Debug, Event)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Event, Reflect)]
 pub enum UpdateRunner {
     /// immediately finish displaying the current text
     FinishLine,
@@ -294,10 +342,11 @@ pub enum UpdateRunner {
     NextLine,
     /// if the index is invalid or the runner isn't currently choosing an answer this is ignored
     ChooseAnswer(usize),
+    ShowEnded,
 }
 
 /// Triggered (usually on a [`ScriptRunner`]) to indicate certain state changes
-#[derive(Debug, Event)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Event, Reflect)]
 pub enum RunnerUpdated {
     HideChoices,
     ShowChoices,
@@ -315,6 +364,11 @@ pub enum RunnerUpdated {
 pub struct ScriptRunner {
     script: Handle<Script>,
     choices_display: Entity,
+    /// If the show has ended
+    show_ended: bool,
+    /// If the script runner has started using the script entries after the show has ended. This
+    /// should always become true after `show_ended` is true and a new entry has been reached.
+    using_ended_entries: bool,
     /// Index of the current ScriptEntry
     current_entry: usize,
     /// If `current_entry` refers to a `Prompt` with `choices = AnswerBlock::Many(choice_vec)`,
@@ -338,6 +392,8 @@ impl ScriptRunner {
         ScriptRunner {
             script,
             choices_display,
+            show_ended: false,
+            using_ended_entries: false,
             current_entry: 0,
             current_answer: None,
             wait_timer: None,
@@ -370,13 +426,12 @@ impl ScriptRunner {
         self.finished_line
     }
     pub fn reset(&mut self) {
+        self.show_ended = false;
+        self.using_ended_entries = false;
+        self.wait_timer = None;
         self.current_entry = 0;
         self.current_answer = None;
-        self.displayed_bytes = 0;
-        self.display_timer.reset();
-        self.display_ticks = 0;
-        self.last_displayed_tick = 0;
-        self.finished_line = false;
+        self.reset_display();
     }
 
     fn reset_display(&mut self) {
@@ -389,6 +444,15 @@ impl ScriptRunner {
     fn finish_line(&mut self, line: &str) {
         self.finished_line = true;
         self.displayed_bytes = line.len();
+    }
+    fn next_entry(&mut self) {
+        if self.show_ended && !self.using_ended_entries {
+            self.reset();
+            self.show_ended = true;
+            self.using_ended_entries = true;
+        } else {
+            self.current_entry += 1;
+        }
     }
 
     fn on_add(mut deferred_world: DeferredWorld, entity: Entity, _: ComponentId) {
@@ -412,7 +476,7 @@ impl ScriptRunner {
             runner_commands.trigger(RunnerUpdated::NoScript);
             return;
         };
-        let Some(entry) = script.get_entry(runner.current_entry) else {
+        let Some(entry) = script.get_entry(runner.current_entry, runner.using_ended_entries) else {
             runner_commands.trigger(RunnerUpdated::Finished);
             return;
         };
@@ -433,15 +497,19 @@ impl ScriptRunner {
                     text.0.clone_from(response);
                     runner.finish_line(&text);
                 }
-                (ScriptEntry::Wait(_), _) | (ScriptEntry::StartShow, _) => {}
-                _ => unreachable!(),
+                (ScriptEntry::Wait(_), _)
+                | (ScriptEntry::StartShow, _)
+                | (ScriptEntry::OnShowEnd, _) => {}
+                (ScriptEntry::Line(_), Some(_)) => unreachable!(),
             },
             UpdateRunner::NextLine => match (entry, runner.current_answer) {
-                (ScriptEntry::Wait(_), _) | (ScriptEntry::StartShow, _) => {}
+                (ScriptEntry::Wait(_), _)
+                | (ScriptEntry::StartShow, _)
+                | (ScriptEntry::OnShowEnd, _) => {}
                 (ScriptEntry::Line(_), None) => {
-                    runner.current_entry += 1;
                     text.0.clear();
                     runner.reset_display();
+                    runner.next_entry();
                 }
                 (ScriptEntry::Prompt { .. }, None) => {}
                 (
@@ -461,19 +529,27 @@ impl ScriptRunner {
                         runner.reset_display();
                         runner_commands.trigger(RunnerUpdated::Finished);
                     } else {
-                        runner.current_entry += 1;
                         runner.current_answer = None;
                         text.0.clear();
                         runner.reset_display();
+                        runner.next_entry();
                     }
                 }
-                _ => unreachable!(),
+                (ScriptEntry::Line(_), Some(_))
+                | (
+                    ScriptEntry::Prompt {
+                        choices: AnswerBlock::Single(_),
+                        ..
+                    },
+                    Some(_),
+                ) => unreachable!(),
             },
             &UpdateRunner::ChooseAnswer(index) => match (entry, runner.current_answer) {
                 (_, Some(_))
                 | (ScriptEntry::Line(_), _)
                 | (ScriptEntry::StartShow, _)
-                | (ScriptEntry::Wait(_), _) => {}
+                | (ScriptEntry::Wait(_), _)
+                | (ScriptEntry::OnShowEnd, _) => {}
                 (
                     ScriptEntry::Prompt {
                         choices: AnswerBlock::Single(_),
@@ -482,11 +558,11 @@ impl ScriptRunner {
                     None,
                 ) => {
                     if index == 0 {
-                        runner.current_entry += 1;
                         text.0.clear();
                         runner.reset_display();
                         commands
                             .trigger_targets(RunnerUpdated::HideChoices, runner.choices_display);
+                        runner.next_entry();
                     }
                 }
                 (
@@ -505,6 +581,9 @@ impl ScriptRunner {
                     commands.trigger_targets(RunnerUpdated::HideChoices, runner.choices_display);
                 }
             },
+            UpdateRunner::ShowEnded => {
+                runner.show_ended = true;
+            }
         }
     }
 }
@@ -564,14 +643,15 @@ impl ScriptChoices {
                             return;
                         }
                         choices_display.displaying_choices = false;
-                        let to_remove = children
+                        for child in children
                             .map(|children| children.deref())
                             .unwrap_or(&[])
                             .iter()
                             .filter(|&&child| choices.contains(child))
-                            .copied()
-                            .collect::<Vec<_>>();
-                        choices_commands.remove_children(&to_remove);
+                            .copied() 
+                        {
+                            commands.entity(child).despawn_recursive();
+                        }
                         if let Ok(mut root_visibility) =
                             with_visibility.get_mut(choices_display.choice_display_root)
                         {
@@ -597,7 +677,9 @@ impl ScriptChoices {
                 let Some(script) = scripts.get(runner.script.id()) else {
                     return;
                 };
-                let Some(entry) = script.get_entry(runner.current_entry) else {
+                let Some(entry) =
+                    script.get_entry(runner.current_entry, runner.using_ended_entries)
+                else {
                     return;
                 };
                 match entry {
@@ -613,7 +695,10 @@ impl ScriptChoices {
                             *root_visibility = Visibility::Inherited;
                         }
                     }
-                    ScriptEntry::Line(_) | ScriptEntry::Wait(_) | ScriptEntry::StartShow => {}
+                    ScriptEntry::Line(_)
+                    | ScriptEntry::Wait(_)
+                    | ScriptEntry::StartShow
+                    | ScriptEntry::OnShowEnd => {}
                 }
             }
             RunnerUpdated::StartShow => {}
@@ -681,7 +766,8 @@ fn update_script_runner_text(
         };
         // this loop is only really necessary so StartShow entries don't cost any frames to process
         loop {
-            let Some(entry) = script.get_entry(runner.current_entry) else {
+            let Some(entry) = script.get_entry(runner.current_entry, runner.using_ended_entries)
+            else {
                 continue 'runners;
             };
             let current_answer = runner.current_answer;
@@ -741,8 +827,8 @@ fn update_script_runner_text(
                         .get_or_insert_with(|| Timer::new(*wait, TimerMode::Once));
                     if wait_timer.tick(time.delta()).finished() {
                         runner.wait_timer = None;
-                        runner.current_entry += 1;
                         runner.reset_display();
+                        runner.next_entry();
                     }
                     // this shouldn't deal with text_len or currently_prompt at all
                     break;
@@ -750,11 +836,25 @@ fn update_script_runner_text(
                 (ScriptEntry::StartShow, _) => {
                     commands.trigger(RunnerUpdated::StartShow);
                     commands.trigger_targets(RunnerUpdated::StartShow, runner_entity);
-                    runner.current_entry += 1;
                     runner.reset_display();
+                    text.0.clear();
+                    runner.next_entry();
                     continue;
                 }
-                _ => unreachable!(),
+                (ScriptEntry::OnShowEnd, _) => {
+                    runner.reset_display();
+                    text.0.clear();
+                    runner.next_entry();
+                    continue;
+                }
+                (ScriptEntry::Line(_), Some(_))
+                | (
+                    ScriptEntry::Prompt {
+                        choices: AnswerBlock::Single(_),
+                        ..
+                    },
+                    Some(_),
+                ) => unreachable!(),
             }
             if runner.displayed_bytes >= text_len && !runner.is_line_finished() {
                 runner.finish_line(&text.0);
@@ -814,7 +914,7 @@ mod tests {
                 Script::from_raw(empty),
                 Ok(Script {
                     raw: Cow::Borrowed(empty),
-                    entries: vec![]
+                    entries: ScriptEntries::default(),
                 })
             );
         }
@@ -828,7 +928,9 @@ mod tests {
                 Script::from_raw(line),
                 Ok(Script {
                     raw: Cow::Borrowed(line),
-                    entries: vec![ScriptEntry::Line(line.trim().into())]
+                    entries: ScriptEntries::from_before_end(vec![ScriptEntry::Line(
+                        line.trim().into()
+                    )])
                 })
             );
         }
@@ -841,7 +943,7 @@ mod tests {
             Script::from_raw(single_answer),
             Ok(Script {
                 raw: single_answer.into(),
-                entries: vec![
+                entries: ScriptEntries::from_before_end(vec![
                     ScriptEntry::Prompt {
                         prompt: "prompt".into(),
                         choices: AnswerBlock::Single("answer".into())
@@ -861,7 +963,7 @@ mod tests {
                             },
                         ])
                     }
-                ]
+                ])
             })
         );
 
@@ -870,7 +972,7 @@ mod tests {
             Script::from_raw(multi_answer),
             Ok(Script {
                 raw: multi_answer.into(),
-                entries: vec![ScriptEntry::Prompt {
+                entries: ScriptEntries::from_before_end(vec![ScriptEntry::Prompt {
                     prompt: "prompt".into(),
                     choices: AnswerBlock::Many(vec![
                         Answer {
@@ -889,7 +991,7 @@ mod tests {
                             is_end: true
                         },
                     ])
-                }]
+                }])
             })
         );
     }
@@ -901,11 +1003,11 @@ mod tests {
             Script::from_raw(to_parse),
             Ok(Script {
                 raw: to_parse.into(),
-                entries: vec![
+                entries: ScriptEntries::from_before_end(vec![
                     ScriptEntry::Wait(Duration::from_secs_f64(1.)),
                     ScriptEntry::Wait(Duration::from_secs_f64(0.25)),
                     ScriptEntry::Wait(Duration::from_secs_f64(10.)),
-                ]
+                ])
             })
         );
     }
@@ -917,11 +1019,30 @@ mod tests {
             Script::from_raw(to_parse),
             Ok(Script {
                 raw: to_parse.into(),
-                entries: vec![
+                entries: ScriptEntries::from_before_end(vec![
                     ScriptEntry::StartShow,
                     ScriptEntry::StartShow,
                     ScriptEntry::StartShow,
-                ]
+                ])
+            })
+        );
+    }
+
+    #[test]
+    fn on_show_end_blocks_parse() {
+        let to_parse = "  [ ended ]\r\n[ended  ]\n [ ended ] \t \r\n";
+        assert_eq!(
+            Script::from_raw(to_parse),
+            Ok(Script {
+                raw: to_parse.into(),
+                entries: ScriptEntries {
+                    before_end: vec![],
+                    after_show_end: vec![
+                        ScriptEntry::OnShowEnd,
+                        ScriptEntry::OnShowEnd,
+                        ScriptEntry::OnShowEnd
+                    ]
+                }
             })
         );
     }
@@ -933,7 +1054,7 @@ mod tests {
             Script::from_raw(to_parse),
             Ok(Script {
                 raw: to_parse.into(),
-                entries: vec![
+                entries: ScriptEntries::from_before_end(vec![
                     ScriptEntry::Line("line 1".into()),
                     ScriptEntry::Wait(Duration::from_secs_f64(1.0)),
                     ScriptEntry::StartShow,
@@ -949,7 +1070,7 @@ mod tests {
                     ScriptEntry::Line("line 2".into()),
                     ScriptEntry::StartShow,
                     ScriptEntry::Line("line 3".into()),
-                ]
+                ])
             })
         );
     }

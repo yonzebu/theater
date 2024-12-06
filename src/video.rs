@@ -3,8 +3,9 @@ use std::{
     marker::PhantomData,
     path::{Path, PathBuf},
     sync::{
+        atomic::{AtomicUsize, Ordering},
         mpsc::{channel, Receiver, SendError, Sender, TryRecvError},
-        Arc, Mutex, PoisonError,
+        Arc, Mutex, PoisonError, RwLock, TryLockError,
     },
 };
 
@@ -124,7 +125,7 @@ impl From<DecodedFrame> for Image {
                 usage,
                 view_formats: &[],
             },
-            sampler: ImageSampler::Default,
+            sampler: ImageSampler::linear(),
             texture_view_descriptor: Some(TextureViewDescriptor {
                 label: None,
                 format: None,
@@ -442,6 +443,8 @@ pub struct VideoStream {
     audio_time_base: Rational,
     audio_channels: u16,
     audio_sample_rate: u32,
+    finished_decoding: bool,
+    finished: bool,
 }
 
 impl VideoStream {
@@ -455,11 +458,11 @@ impl VideoStream {
             .streams()
             .best(media::Type::Audio)
             .ok_or(ffmpeg::Error::StreamNotFound)?;
-        println!(
+        info!(
             "video stream stuff: time_base = {:?}, start_time={}, duration = {}, frames = {}, rate = {:?}, avg frame rate = {:?}",
             video_stream.time_base(), video_stream.start_time(), video_stream.duration(), video_stream.frames(), video_stream.rate(), video_stream.avg_frame_rate()
         );
-        println!(
+        info!(
             "audio stream stuff: time_base = {:?}, start_time={}, duration = {}, frames = {}, sample rate = {:?}, avg frame rate = {:?}",
             audio_stream.time_base(), audio_stream.start_time(), audio_stream.duration(), audio_stream.frames(), audio_stream.rate(), audio_stream.avg_frame_rate(),
         );
@@ -508,7 +511,13 @@ impl VideoStream {
             audio_time_base,
             audio_channels,
             audio_sample_rate,
+            finished_decoding: false,
+            finished: false,
         })
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.finished
     }
 }
 
@@ -575,7 +584,10 @@ impl Decodable for VideoStream {
     type Decoder = VideoAudioSource;
     fn decoder(&self) -> Self::Decoder {
         let (send, recv) = channel();
-        self.audio_sinks.lock().unwrap().push(send);
+        self.audio_sinks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(send);
         VideoAudioSource {
             buffered_audio: self.buffered_audio.clone(),
             recv_audio: recv,
@@ -667,6 +679,12 @@ impl SpecializedRenderPipeline for MipGenerationPipeline {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Event)]
+#[non_exhaustive]
+pub enum VideoUpdated {
+    Finished(AssetId<VideoStream>),
+}
+
 #[derive(Default, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct VideoStreamSettings {
     pub use_mips: bool,
@@ -731,6 +749,7 @@ impl Plugin for VideoPlugin {
         app.init_asset::<VideoStream>()
             .init_asset_loader::<VideoStreamLoader>()
             .add_audio_source::<VideoStream>()
+            .add_event::<VideoUpdated>()
             .init_resource::<QueuedFrameMips>()
             .add_systems(PostUpdate, update_videos.in_set(VideoSet::UpdateStreams))
             .configure_sets(
@@ -848,14 +867,16 @@ impl<R: ReceiveFrame + Component> Plugin for VideoPlayerPlugin<R> {
 }
 
 fn update_videos(
+    mut commands: Commands,
     mut videos: ResMut<Assets<VideoStream>>,
     mut images: ResMut<Assets<Image>>,
     mut queued_frame_mips: ResMut<QueuedFrameMips>,
+    mut video_updates: EventWriter<VideoUpdated>,
     time: Res<Time>,
 ) {
     queued_frame_mips.clear();
     let dt: Rational = time.delta_secs_f64().into();
-    for (_, video) in videos.iter_mut() {
+    for (video_id, video) in videos.iter_mut() {
         let video = &mut *video;
         let vtb = video.video_time_base;
         let atb = video.audio_time_base;
@@ -896,6 +917,7 @@ fn update_videos(
                         .get_mut()
                         .unwrap_or_else(PoisonError::into_inner)
                         .clear();
+                    video.finished_decoding = true;
                 }
                 // no need to decode more frames yet
                 video.decoder = Some(decoder);
@@ -965,6 +987,11 @@ fn update_videos(
         if let Some(last) = video.buffered_frames.drain(0..current).last() {
             if video.buffered_frames.is_empty() {
                 video.buffered_frames.push_back(last);
+                if video.finished_decoding && !video.finished {
+                    video.finished = true;
+                    commands.trigger(VideoUpdated::Finished(video_id));
+                    video_updates.send(VideoUpdated::Finished(video_id));
+                }
             }
         }
         let current_apts: f64 = (video.audio_progress / atb).into();

@@ -1,10 +1,10 @@
 #![allow(unused, clippy::type_complexity, clippy::too_many_arguments)]
-use bevy::asset::UntypedAssetId;
+use bevy::asset::{RenderAssetUsages, UntypedAssetId};
 use bevy::audio::PlaybackMode;
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::world::DeferredWorld;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, NotShadowCaster};
-use bevy::render::render_resource::{AsBindGroup, Face, ShaderRef};
+use bevy::render::render_resource::{AsBindGroup, Extent3d, Face, ShaderRef, TextureDimension, TextureFormat};
 use bevy::utils::hashbrown::HashMap;
 use bevy::{math::vec3, prelude::*};
 
@@ -14,7 +14,7 @@ use screen_light::{
     ScreenLight, ScreenLightExtension, ScreenLightExtensionPlugin, ScreenLightPlugin,
 };
 use script::{RunnerUpdated, ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner};
-use video::{VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream, VideoStreamSettings};
+use video::{VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream, VideoStreamSettings, VideoUpdated};
 mod screen_light;
 mod script;
 mod video;
@@ -125,6 +125,12 @@ impl WaitingForLoads {
     }
 }
 
+#[derive(Debug, Component, Deref, DerefMut)]
+struct FutureVideoPlayer(Handle<VideoStream>);
+
+#[derive(Debug, Resource, Deref, DerefMut)]
+struct ScreenOffImage(Handle<Image>);
+
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -134,13 +140,22 @@ fn setup(
     assets: Res<AssetServer>,
 ) {
     commands.spawn((Camera3d::default(), Transform::from_xyz(0., 2., 5.)));
-    // commands.spawn((PointLight::default(), Transform::from_xyz(0., 0., -9.)));
+    commands.add_observer(on_start_show);
+    commands.add_observer(on_video_finished);
     let video_stream = assets.load_with_settings(
         "nonfinal/testshow.mp4",
         |settings: &mut VideoStreamSettings| {
+            // mips are too slow to use and i don't have time/want to improve them right now
             settings.use_mips = false;
         },
     );
+    let screen_off_image = images.add(Image::new(
+        Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }, 
+        TextureDimension::D2, 
+        vec![200, 200, 200, 255], 
+        TextureFormat::Rgba8Unorm, 
+        RenderAssetUsages::all()
+    ));
     // commands.spawn((
     //     AudioPlayer(video_stream.clone()),
     //     PlaybackSettings {
@@ -153,9 +168,9 @@ fn setup(
         // keep transform synced with screen transform
         Transform::from_xyz(0., 2.5, SCREEN_LIGHT_POS).looking_to(Dir3::Z, Dir3::Y),
         ScreenLight {
-            image: Handle::default(),
+            image: screen_off_image.clone(),
         },
-        VideoPlayer(video_stream.clone()),
+        FutureVideoPlayer(video_stream.clone()),
         Projection::Perspective(PerspectiveProjection {
             fov: 2. * f32::atan(SCREEN_HEIGHT / 2. / (SCREEN_POS - SCREEN_LIGHT_POS)),
             aspect_ratio: 16. / 9.,
@@ -171,6 +186,7 @@ fn setup(
         Mesh3d(rectangle.clone()),
         MeshMaterial3d(materials.add(StandardMaterial {
             unlit: true,
+            base_color_texture: Some(screen_off_image.clone()),
             ..default()
         })),
         Transform {
@@ -178,7 +194,7 @@ fn setup(
             scale: vec3(SCREEN_WIDTH, SCREEN_HEIGHT, 1.),
             ..default()
         },
-        VideoPlayer(video_stream.clone()),
+        FutureVideoPlayer(video_stream.clone()),
         WaitingForLoads,
         NotShadowCaster,
         Screen,
@@ -364,6 +380,7 @@ fn setup(
         chair.id().untyped(),
         script.id().untyped(),
     ]));
+    commands.insert_resource(ScreenOffImage(screen_off_image));
 }
 
 fn on_text_visible_box_clicked(
@@ -381,6 +398,69 @@ fn on_text_visible_box_clicked(
             commands.trigger_targets(UpdateRunner::NextLine, runner_entity);
         } else {
             commands.trigger_targets(UpdateRunner::FinishLine, runner_entity);
+        }
+    }
+}
+
+fn on_start_show(
+    trigger: Trigger<RunnerUpdated>, 
+    mut commands: Commands,
+    mut video_streams: ResMut<Assets<VideoStream>>,
+    future_video_players: Query<(Entity, &FutureVideoPlayer)>
+) {
+    if *trigger.event() == RunnerUpdated::StartShow {
+        for (_, video) in video_streams.iter_mut() {
+            video.playing = true;
+        }
+        for (entity, player) in future_video_players.iter() {
+            commands
+                .entity(entity)
+                .insert(VideoPlayer(player.0.clone()))
+                .remove::<FutureVideoPlayer>();
+        }
+    }
+}
+
+fn on_video_finished(
+    trigger: Trigger<VideoUpdated>,
+    mut commands: Commands,
+    video_streams: Res<Assets<VideoStream>>,
+    mut video_players: Query<
+        (
+            Entity,
+            AnyOf<(
+                &MeshMaterial3d<StandardMaterial>, 
+                &mut ScreenLight,
+            )>,
+            &VideoPlayer,
+        ), 
+    >,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    script_runners: Query<Entity, With<ScriptRunner>>,
+    screen_off_image: Res<ScreenOffImage>,
+) {
+    if let &VideoUpdated::Finished(id) = trigger.event() {
+        info!("video finished!");
+        if video_streams.contains(id) {
+            for entity in script_runners.iter() {
+                commands.trigger_targets(UpdateRunner::ShowEnded, entity);
+            }
+
+            for (entity, (material, screen_light), player) in video_players.iter_mut() {
+                if player.0.id() != id {
+                    continue;
+                }
+                // TODO: different image replacement?
+                if let Some(handle) = material {
+                    if let Some(material) = materials.get_mut(handle.id()) {
+                        material.base_color_texture = Some(screen_off_image.0.clone());
+                    }
+                } else if let Some(mut screen_light) = screen_light {
+                    screen_light.image = screen_off_image.0.clone();
+                }
+                commands.entity(entity).remove::<VideoPlayer>();
+            }
         }
     }
 }
@@ -405,6 +485,7 @@ fn update_chair_materials(
             Handle<ExtendedMaterial<StandardMaterial, ScreenLightExtension>>,
         >,
     >,
+    mut updated_chairs: Local<usize>,
 ) {
     let Ok(screen_light) = screen_light.get_single() else {
         return;
@@ -419,6 +500,7 @@ fn update_chair_materials(
                     .entity(entity)
                     .insert(MeshMaterial3d(extended.clone()))
                     .remove::<MeshMaterial3d<StandardMaterial>>();
+                *updated_chairs += 1;
                 continue;
             }
             let Some(old_material) = materials.get_mut(old_material_handle.id()) else {
@@ -437,7 +519,11 @@ fn update_chair_materials(
                 .insert(MeshMaterial3d(extended))
                 .remove::<MeshMaterial3d<StandardMaterial>>();
             to_load.0.push(extended_id.untyped());
+            *updated_chairs += 1;
         }
+    }
+    if *updated_chairs >= (CHAIR_ROWS * CHAIR_COLS) as usize {
+        *updated_chairs = 0;
     }
 }
 
@@ -449,7 +535,7 @@ fn update_video_player(
     if keyboard.just_pressed(KeyCode::KeyV) {
         for (_, video_stream) in video_streams.iter_mut() {
             video_stream.playing = !video_stream.playing;
-            println!("video playing = {}", video_stream.playing);
+            info!("video playing = {}", video_stream.playing);
         }
     }
     for (audio_player, audio_sink) in audio_players.iter() {
