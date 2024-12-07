@@ -345,9 +345,11 @@ pub enum UpdateRunner {
     ShowEnded,
 }
 
-/// Triggered (usually on a [`ScriptRunner`]) to indicate certain state changes
+/// Triggered (on a [`ScriptRunner`] unless explicitly stated otherwise) to indicate certain state changes
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Event, Reflect)]
 pub enum RunnerUpdated {
+    HideText,
+    ShowText,
     HideChoices,
     ShowChoices,
     Finished,
@@ -385,6 +387,7 @@ pub struct ScriptRunner {
     /// The timestamp of the last displayed char in timer ticks
     last_displayed_tick: u32,
     finished_line: bool,
+    showing_text: bool,
 }
 
 impl ScriptRunner {
@@ -405,6 +408,7 @@ impl ScriptRunner {
             display_ticks: 0,
             last_displayed_tick: 0,
             finished_line: false,
+            showing_text: false,
         }
     }
     pub fn pause(&mut self) {
@@ -459,7 +463,8 @@ impl ScriptRunner {
         deferred_world
             .commands()
             .entity(entity)
-            .observe(ScriptRunner::on_update_runner_trigger);
+            .observe(ScriptRunner::on_update_runner_trigger)
+            .observe(ScriptRunner::on_runner_updated);
     }
     fn on_update_runner_trigger(
         trigger: Trigger<UpdateRunner>,
@@ -586,6 +591,22 @@ impl ScriptRunner {
             }
         }
     }
+    fn on_runner_updated(
+        trigger: Trigger<RunnerUpdated>,
+        mut commands: Commands,
+        mut script_runners: Query<&mut ScriptRunner>,
+    ) {
+        if *trigger.event() == RunnerUpdated::Finished {
+            if let Ok(mut runner) = script_runners.get_mut(trigger.entity()) {
+                if runner.showing_text {
+                    commands
+                        .entity(trigger.entity())
+                        .trigger(RunnerUpdated::HideText);
+                    runner.showing_text = false;
+                }
+            }
+        }
+    }
 }
 
 #[derive(Component)]
@@ -634,6 +655,7 @@ impl ScriptChoices {
         scripts: Res<Assets<Script>>,
     ) {
         match trigger.event() {
+            RunnerUpdated::HideText | RunnerUpdated::ShowText => {}
             RunnerUpdated::HideChoices | RunnerUpdated::Finished | RunnerUpdated::NoScript => {
                 if let Some(mut choices_commands) = commands.get_entity(trigger.entity()) {
                     if let Ok((mut choices_display, children)) =
@@ -800,15 +822,16 @@ fn update_script_runner_text(
             let text_len;
             let currently_prompt;
             match (entry, current_answer) {
-                (ScriptEntry::Line(line), None) => {
-                    extend_text(line);
-                    text_len = line.as_bytes().len();
-                    currently_prompt = false;
-                }
-                (ScriptEntry::Prompt { prompt, .. }, None) => {
+                (ScriptEntry::Line(prompt), None) | (ScriptEntry::Prompt { prompt, .. }, None) => {
                     extend_text(prompt);
                     text_len = prompt.as_bytes().len();
-                    currently_prompt = true;
+                    currently_prompt = matches!(entry, ScriptEntry::Prompt { .. });
+                    if !runner.showing_text {
+                        commands
+                            .entity(runner_entity)
+                            .trigger(RunnerUpdated::ShowText);
+                        runner.showing_text = true;
+                    }
                 }
                 (
                     ScriptEntry::Prompt {
@@ -820,11 +843,23 @@ fn update_script_runner_text(
                     extend_text(&answers[answer_index].response);
                     text_len = answers[answer_index].response.as_bytes().len();
                     currently_prompt = false;
+                    if !runner.showing_text {
+                        commands
+                            .entity(runner_entity)
+                            .trigger(RunnerUpdated::ShowText);
+                        runner.showing_text = true;
+                    }
                 }
                 (ScriptEntry::Wait(wait), _) => {
-                    let wait_timer = runner
-                        .wait_timer
-                        .get_or_insert_with(|| Timer::new(*wait, TimerMode::Once));
+                    let wait_timer = runner.wait_timer.get_or_insert_with(|| {
+                        if runner.showing_text {
+                            commands
+                                .entity(runner_entity)
+                                .trigger(RunnerUpdated::HideText);
+                            runner.showing_text = false;
+                        }
+                        Timer::new(*wait, TimerMode::Once)
+                    });
                     if wait_timer.tick(time.delta()).finished() {
                         runner.wait_timer = None;
                         runner.reset_display();

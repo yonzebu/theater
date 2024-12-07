@@ -610,6 +610,14 @@ fn setup(
         .entity(text_box_wrapper)
         .add_child(text_visible_box);
     commands.entity(text_visible_box).add_child(script_runner);
+    commands
+        .entity(script_runner)
+        .observe(|trigger: Trigger<RunnerUpdated>| match trigger.event() {
+            RunnerUpdated::HideText | RunnerUpdated::ShowText => {
+                println!("received updated: {:?}", trigger.event());
+            }
+            _ => {}
+        });
 
     let choice_box_wrapper = commands
         .spawn((Node {
