@@ -29,6 +29,11 @@ mod util;
 mod video;
 use util::*;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Event)]
+enum AnimationUpdated {
+    Finished,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, States)]
 enum Progress {
     #[default]
@@ -271,15 +276,11 @@ fn setup(
     const STEP_DOWN_EASING: EaseFunction = EaseFunction::QuadraticOut;
     // translation (very ugly, there aren't many good dynamic ways to construct curves right now i don't think)
     entering_clip.add_curve_to_target(
-        you_target_id, 
+        you_target_id,
         AnimatableCurve::new(
             animated_field!(Transform::translation),
             // step 1 up
-            EasingCurve::new(
-                vec3(6., 1., -0.75),
-                vec3(5.6, 1.1, -0.75),
-                STEP_UP_EASING,
-            )
+            EasingCurve::new(vec3(6., 1., -0.75), vec3(5.6, 1.1, -0.75), STEP_UP_EASING)
                 .reparametrize_linear(Interval::new(0., 0.5).unwrap())
                 .unwrap()
                 // step 1 down
@@ -289,19 +290,15 @@ fn setup(
                         vec3(5.2, 1., -0.75),
                         STEP_DOWN_EASING,
                     )
-                        .reparametrize_linear(Interval::new(0.5, 1.).unwrap())
-                        .unwrap()
+                    .reparametrize_linear(Interval::new(0.5, 1.).unwrap())
+                    .unwrap(),
                 )
                 .unwrap()
                 // step 2 up
                 .chain(
-                    EasingCurve::new(
-                        vec3(5.2, 1., -0.75),
-                        vec3(4.8, 1.1, -0.75),
-                        STEP_UP_EASING,
-                    )
+                    EasingCurve::new(vec3(5.2, 1., -0.75), vec3(4.8, 1.1, -0.75), STEP_UP_EASING)
                         .reparametrize_linear(Interval::new(1., 1.5).unwrap())
-                        .unwrap()
+                        .unwrap(),
                 )
                 .unwrap()
                 // step 2 down
@@ -311,41 +308,29 @@ fn setup(
                         vec3(4.4, 1., -0.75),
                         STEP_DOWN_EASING,
                     )
-                        .reparametrize_linear(Interval::new(1.5, 2.).unwrap())
-                        .unwrap()
+                    .reparametrize_linear(Interval::new(1.5, 2.).unwrap())
+                    .unwrap(),
                 )
                 .unwrap()
                 // step 3 up
                 .chain(
-                    EasingCurve::new(
-                        vec3(4.4, 1., -0.75),
-                        vec3(4., 1.1, -0.75),
-                        STEP_UP_EASING,
-                    )
+                    EasingCurve::new(vec3(4.4, 1., -0.75), vec3(4., 1.1, -0.75), STEP_UP_EASING)
                         .reparametrize_linear(Interval::new(2., 2.5).unwrap())
-                        .unwrap()
+                        .unwrap(),
                 )
                 .unwrap()
                 // step 3 down
                 .chain(
-                    EasingCurve::new(
-                        vec3(4., 1.1, -0.75),
-                        vec3(3.6, 1., -0.75),
-                        STEP_DOWN_EASING,
-                    )
+                    EasingCurve::new(vec3(4., 1.1, -0.75), vec3(3.6, 1., -0.75), STEP_DOWN_EASING)
                         .reparametrize_linear(Interval::new(2.5, 3.).unwrap())
-                        .unwrap()
+                        .unwrap(),
                 )
                 .unwrap()
                 // step 4 up
                 .chain(
-                    EasingCurve::new(
-                        vec3(3.6, 1., -0.75),
-                        vec3(3.2, 1.1, -0.75),
-                        STEP_UP_EASING,
-                    )
+                    EasingCurve::new(vec3(3.6, 1., -0.75), vec3(3.2, 1.1, -0.75), STEP_UP_EASING)
                         .reparametrize_linear(Interval::new(3., 3.5).unwrap())
-                        .unwrap()
+                        .unwrap(),
                 )
                 .unwrap()
                 // step 4 down
@@ -355,36 +340,29 @@ fn setup(
                         vec3(2.8, 1., -0.75),
                         STEP_DOWN_EASING,
                     )
-                        .reparametrize_linear(Interval::new(3.5, 4.).unwrap())
-                        .unwrap()
+                    .reparametrize_linear(Interval::new(3.5, 4.).unwrap())
+                    .unwrap(),
                 )
                 .unwrap()
                 // step 5 up
                 .chain(
-                    EasingCurve::new(
-                        vec3(2.8, 1., -0.75),
-                        vec3(2.4, 1.1, -0.75),
-                        STEP_UP_EASING,
-                    )
+                    EasingCurve::new(vec3(2.8, 1., -0.75), vec3(2.4, 1.1, -0.75), STEP_UP_EASING)
                         .reparametrize_linear(Interval::new(4., 4.5).unwrap())
-                        .unwrap()
+                        .unwrap(),
                 )
                 .unwrap()
                 // step 5 down
                 .chain(
-                    EasingCurve::new(
-                        vec3(2.4, 1.1, -0.75),
-                        vec3(2., 1., -0.75),
-                        STEP_DOWN_EASING,
-                    )
+                    EasingCurve::new(vec3(2.4, 1.1, -0.75), vec3(2., 1., -0.75), STEP_DOWN_EASING)
                         .reparametrize_linear(Interval::new(4.5, 5.).unwrap())
-                        .unwrap()
+                        .unwrap(),
                 )
                 .unwrap()
                 // stay still
-                .chain(
-                    ConstantCurve::new(Interval::new(5., 8.25).unwrap(), vec3(2., 1., -0.75))
-                )
+                .chain(ConstantCurve::new(
+                    Interval::new(5., 8.25).unwrap(),
+                    vec3(2., 1., -0.75),
+                ))
                 .unwrap()
                 // sit down
                 .chain(
@@ -393,11 +371,11 @@ fn setup(
                         vec3(2., 0., -0.5),
                         EaseFunction::ExponentialOut,
                     )
-                        .reparametrize_linear(Interval::new(8.25, 8.5).unwrap())
-                        .unwrap()
+                    .reparametrize_linear(Interval::new(8.25, 8.5).unwrap())
+                    .unwrap(),
                 )
-                .unwrap()
-        )
+                .unwrap(),
+        ),
     );
     let watching_rot = Transform::default().looking_to(Dir3::Y, Dir3::Z).rotation;
     let enter_rot = Quat::from_rotation_y(f32::to_radians(30.)) * watching_rot;
@@ -445,6 +423,7 @@ fn setup(
                 .unwrap(),
         ),
     );
+    entering_clip.add_event(8.5, AnimationUpdated::Finished);
     let (entering_graph, entering_index) = AnimationGraph::from_clip(animations.add(entering_clip));
     let mut you_anim_player = AnimationPlayer::default();
     you_anim_player
@@ -465,17 +444,26 @@ fn setup(
                 .with_scale(Vec3::ONE * 0.5),
             WaitingForLoads,
             You,
-            DebugMarker
+            DebugMarker,
         ))
         .id();
-    commands.entity(you_entity).insert((
-        AnimationTarget {
-            id: you_target_id,
-            player: you_entity,
-        },
-        you_anim_player,
-        AnimationGraphHandle(anim_graphs.add(entering_graph)),
-    ));
+    commands
+        .entity(you_entity)
+        .insert((
+            AnimationTarget {
+                id: you_target_id,
+                player: you_entity,
+            },
+            you_anim_player,
+            AnimationGraphHandle(anim_graphs.add(entering_graph)),
+        ))
+        .observe(
+            |trigger: Trigger<AnimationUpdated>, mut script_runners: Query<&mut ScriptRunner>| {
+                for mut runner in script_runners.iter_mut() {
+                    runner.unpause();
+                }
+            },
+        );
 
     // chairs
     let chair: Handle<Scene> = assets.load("chair.glb#Scene0");
