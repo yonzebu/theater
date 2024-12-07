@@ -648,7 +648,7 @@ impl ScriptChoices {
                             .unwrap_or(&[])
                             .iter()
                             .filter(|&&child| choices.contains(child))
-                            .copied() 
+                            .copied()
                         {
                             commands.entity(child).despawn_recursive();
                         }

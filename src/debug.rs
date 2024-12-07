@@ -50,22 +50,10 @@ fn debug(world: &mut World) {
         return;
     }
 
-    let mut camera_query = world.query::<(&Camera, &Transform)>();
-    if let Ok((_, transform)) = camera_query.get_single(world) {
-        println!("camera transform: {transform:?}");
-    };
     let mut marked_query = world.query::<(&DebugMarker, EntityRef)>();
     for (_, marked_data) in marked_query.iter(world) {
-        // for id in marked_data.archetype().components() {
-        //     println!("found component {:?}", world.components().get_info(id).map(|info| info.name()))
-        // }
-        // let Mesh3d(mesh_handle) = marked_data.get::<Mesh3d>().unwrap();
-        // let meshes = world.resource::<Assets<Mesh>>();
-        // println!("mesh handle: {mesh_handle:?}");
-        // let mesh = meshes.get(mesh_handle).unwrap();
-        // let aabb = mesh.compute_aabb().unwrap();
-        // println!("aabb: {aabb:?}");
-        // println!("marked transform: {marked_data:?}");
+        let transform = marked_data.get::<Transform>().unwrap();
+        println!("postion: {:?}", transform.translation);
     }
 }
 

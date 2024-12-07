@@ -537,7 +537,12 @@ fn update_screen_light_materials<M: Material>(
         Entity,
         (
             With<ScreenLight>,
-            Or<(Added<ScreenLight>, Added<Frustum>, Changed<ScreenLight>, Changed<Frustum>)>,
+            Or<(
+                Added<ScreenLight>,
+                Added<Frustum>,
+                Changed<ScreenLight>,
+                Changed<Frustum>,
+            )>,
         ),
     >,
     materials: Res<Assets<Extended<M>>>,
@@ -789,7 +794,8 @@ pub fn prepare_screen_lights(
                 label: "screen light shadow map".into(),
                 size: Extent3d {
                     width: SCREEN_LIGHT_SHADOW_MAP_WIDTH,
-                    height: (SCREEN_LIGHT_SHADOW_MAP_WIDTH * image.texture.width()) / image.texture.height(),
+                    height: (SCREEN_LIGHT_SHADOW_MAP_WIDTH * image.texture.width())
+                        / image.texture.height(),
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,

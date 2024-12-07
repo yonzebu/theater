@@ -1,10 +1,16 @@
 #![allow(unused, clippy::type_complexity, clippy::too_many_arguments)]
+use core::fmt::Debug;
+
+use bevy::animation::{animated_field, AnimationTarget, AnimationTargetId, RepeatAnimation};
 use bevy::asset::{RenderAssetUsages, UntypedAssetId};
 use bevy::audio::PlaybackMode;
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::world::DeferredWorld;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, NotShadowCaster};
-use bevy::render::render_resource::{AsBindGroup, Extent3d, Face, ShaderRef, TextureDimension, TextureFormat};
+use bevy::reflect::Reflectable;
+use bevy::render::render_resource::{
+    AsBindGroup, Extent3d, Face, ShaderRef, TextureDimension, TextureFormat,
+};
 use bevy::utils::hashbrown::HashMap;
 use bevy::{math::vec3, prelude::*};
 
@@ -14,10 +20,14 @@ use screen_light::{
     ScreenLight, ScreenLightExtension, ScreenLightExtensionPlugin, ScreenLightPlugin,
 };
 use script::{RunnerUpdated, ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner};
-use video::{VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream, VideoStreamSettings, VideoUpdated};
+use video::{
+    VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream, VideoStreamSettings, VideoUpdated,
+};
 mod screen_light;
 mod script;
+mod util;
 mod video;
+use util::*;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, States)]
 enum Progress {
@@ -70,6 +80,14 @@ struct StartUiRoot;
 #[derive(Component)]
 #[component(storage = "SparseSet")]
 struct StartButton;
+
+#[derive(Component)]
+#[component(storage = "SparseSet")]
+struct You;
+
+#[derive(Component)]
+#[component(storage = "SparseSet")]
+struct Me;
 
 const CHAIR_ROWS: i32 = 5;
 const CHAIR_COLS: i32 = 5;
@@ -127,6 +145,8 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut papers: ResMut<Assets<ExtendedMaterial<StandardMaterial, Paper>>>,
     mut images: ResMut<Assets<Image>>,
+    mut animations: ResMut<Assets<AnimationClip>>,
+    mut anim_graphs: ResMut<Assets<AnimationGraph>>,
     assets: Res<AssetServer>,
 ) {
     commands.spawn((Camera3d::default(), Transform::from_xyz(0., 2., 5.)));
@@ -140,11 +160,15 @@ fn setup(
         },
     );
     let screen_off_image = images.add(Image::new(
-        Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }, 
-        TextureDimension::D2, 
-        vec![200, 200, 200, 255], 
-        TextureFormat::Rgba8Unorm, 
-        RenderAssetUsages::all()
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        vec![200, 200, 200, 255],
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::all(),
     ));
     // commands.spawn((
     //     AudioPlayer(video_stream.clone()),
@@ -239,19 +263,218 @@ fn setup(
             .looking_to(Dir3::Y, Dir3::Z)
             .with_scale(Vec3::ONE * 0.5),
         WaitingForLoads,
+        Me,
     ));
+    let mut entering_clip = AnimationClip::default();
+    let you_target_id = AnimationTargetId::from_name(&Name::new("you"));
+    const STEP_UP_EASING: EaseFunction = EaseFunction::QuadraticIn;
+    const STEP_DOWN_EASING: EaseFunction = EaseFunction::QuadraticOut;
+    // translation (very ugly, there aren't many good dynamic ways to construct curves right now i don't think)
+    entering_clip.add_curve_to_target(
+        you_target_id, 
+        AnimatableCurve::new(
+            animated_field!(Transform::translation),
+            // step 1 up
+            EasingCurve::new(
+                vec3(6., 1., -0.75),
+                vec3(5.6, 1.1, -0.75),
+                STEP_UP_EASING,
+            )
+                .reparametrize_linear(Interval::new(0., 0.5).unwrap())
+                .unwrap()
+                // step 1 down
+                .chain(
+                    EasingCurve::new(
+                        vec3(5.6, 1.1, -0.75),
+                        vec3(5.2, 1., -0.75),
+                        STEP_DOWN_EASING,
+                    )
+                        .reparametrize_linear(Interval::new(0.5, 1.).unwrap())
+                        .unwrap()
+                )
+                .unwrap()
+                // step 2 up
+                .chain(
+                    EasingCurve::new(
+                        vec3(5.2, 1., -0.75),
+                        vec3(4.8, 1.1, -0.75),
+                        STEP_UP_EASING,
+                    )
+                        .reparametrize_linear(Interval::new(1., 1.5).unwrap())
+                        .unwrap()
+                )
+                .unwrap()
+                // step 2 down
+                .chain(
+                    EasingCurve::new(
+                        vec3(4.8, 1.1, -0.75),
+                        vec3(4.4, 1., -0.75),
+                        STEP_DOWN_EASING,
+                    )
+                        .reparametrize_linear(Interval::new(1.5, 2.).unwrap())
+                        .unwrap()
+                )
+                .unwrap()
+                // step 3 up
+                .chain(
+                    EasingCurve::new(
+                        vec3(4.4, 1., -0.75),
+                        vec3(4., 1.1, -0.75),
+                        STEP_UP_EASING,
+                    )
+                        .reparametrize_linear(Interval::new(2., 2.5).unwrap())
+                        .unwrap()
+                )
+                .unwrap()
+                // step 3 down
+                .chain(
+                    EasingCurve::new(
+                        vec3(4., 1.1, -0.75),
+                        vec3(3.6, 1., -0.75),
+                        STEP_DOWN_EASING,
+                    )
+                        .reparametrize_linear(Interval::new(2.5, 3.).unwrap())
+                        .unwrap()
+                )
+                .unwrap()
+                // step 4 up
+                .chain(
+                    EasingCurve::new(
+                        vec3(3.6, 1., -0.75),
+                        vec3(3.2, 1.1, -0.75),
+                        STEP_UP_EASING,
+                    )
+                        .reparametrize_linear(Interval::new(3., 3.5).unwrap())
+                        .unwrap()
+                )
+                .unwrap()
+                // step 4 down
+                .chain(
+                    EasingCurve::new(
+                        vec3(3.2, 1.1, -0.75),
+                        vec3(2.8, 1., -0.75),
+                        STEP_DOWN_EASING,
+                    )
+                        .reparametrize_linear(Interval::new(3.5, 4.).unwrap())
+                        .unwrap()
+                )
+                .unwrap()
+                // step 5 up
+                .chain(
+                    EasingCurve::new(
+                        vec3(2.8, 1., -0.75),
+                        vec3(2.4, 1.1, -0.75),
+                        STEP_UP_EASING,
+                    )
+                        .reparametrize_linear(Interval::new(4., 4.5).unwrap())
+                        .unwrap()
+                )
+                .unwrap()
+                // step 5 down
+                .chain(
+                    EasingCurve::new(
+                        vec3(2.4, 1.1, -0.75),
+                        vec3(2., 1., -0.75),
+                        STEP_DOWN_EASING,
+                    )
+                        .reparametrize_linear(Interval::new(4.5, 5.).unwrap())
+                        .unwrap()
+                )
+                .unwrap()
+                // stay still
+                .chain(
+                    ConstantCurve::new(Interval::new(5., 8.25).unwrap(), vec3(2., 1., -0.75))
+                )
+                .unwrap()
+                // sit down
+                .chain(
+                    EasingCurve::new(
+                        vec3(2., 1., -0.75),
+                        vec3(2., 0., -0.5),
+                        EaseFunction::ExponentialOut,
+                    )
+                        .reparametrize_linear(Interval::new(8.25, 8.5).unwrap())
+                        .unwrap()
+                )
+                .unwrap()
+        )
+    );
+    let watching_rot = Transform::default().looking_to(Dir3::Y, Dir3::Z).rotation;
+    let enter_rot = Quat::from_rotation_y(f32::to_radians(30.)) * watching_rot;
+    let look_right_rot = Quat::from_rotation_y(f32::to_radians(-45.)) * watching_rot;
+    let look_left_rot = Quat::from_rotation_y(f32::to_radians(45.)) * watching_rot;
+    // all rotation in the animation
+    entering_clip.add_curve_to_target(
+        you_target_id,
+        AnimatableCurve::new(
+            animated_field!(Transform::rotation),
+            // steps
+            ConstantCurve::new(Interval::new(0., 5.5).unwrap(), enter_rot)
+                // look right
+                .chain(
+                    EasingCurve::new(enter_rot, look_right_rot, EaseFunction::BackOut)
+                        .reparametrize_linear(Interval::new(5.5, 6.).unwrap())
+                        .unwrap(),
+                )
+                .unwrap()
+                // pause
+                .chain(ConstantCurve::new(
+                    Interval::new(6., 6.5).unwrap(),
+                    look_right_rot,
+                ))
+                .unwrap()
+                // look left
+                .chain(
+                    EasingCurve::new(look_right_rot, look_left_rot, EaseFunction::BackOut)
+                        .reparametrize_linear(Interval::new(6.5, 7.).unwrap())
+                        .unwrap(),
+                )
+                .unwrap()
+                // pause
+                .chain(ConstantCurve::new(
+                    Interval::new(7., 7.5).unwrap(),
+                    look_left_rot,
+                ))
+                .unwrap()
+                // look forward
+                .chain(
+                    EasingCurve::new(look_left_rot, watching_rot, EaseFunction::BackOut)
+                        .reparametrize_linear(Interval::new(7.5, 8.).unwrap())
+                        .unwrap(),
+                )
+                .unwrap(),
+        ),
+    );
+    let (entering_graph, entering_index) = AnimationGraph::from_clip(animations.add(entering_clip));
+    let mut you_anim_player = AnimationPlayer::default();
+    you_anim_player
+        .play(entering_index)
+        .set_repeat(RepeatAnimation::Never)
+        .pause();
     let you_image = assets.load("you.png");
     let you_mesh = assets.load("you.glb#Mesh0/Primitive0");
-    commands.spawn((
-        Mesh3d(you_mesh.clone()),
-        MeshMaterial3d(papers.add(ExtendedMaterial {
-            base: StandardMaterial::from(you_image.clone()),
-            extension: Paper {},
-        })),
-        Transform::from_xyz(2., 0., -0.5)
-            .looking_to(Dir3::Y, Dir3::Z)
-            .with_scale(Vec3::ONE * 0.5),
-        WaitingForLoads,
+    let you_entity = commands
+        .spawn((
+            Mesh3d(you_mesh.clone()),
+            MeshMaterial3d(papers.add(ExtendedMaterial {
+                base: StandardMaterial::from(you_image.clone()),
+                extension: Paper {},
+            })),
+            Transform::from_xyz(6., 1., -0.5)
+                .looking_to(Dir3::Y, Dir3::Z)
+                .with_scale(Vec3::ONE * 0.5),
+            WaitingForLoads,
+            You,
+            DebugMarker
+        ))
+        .id();
+    commands.entity(you_entity).insert((
+        AnimationTarget {
+            id: you_target_id,
+            player: you_entity,
+        },
+        you_anim_player,
+        AnimationGraphHandle(anim_graphs.add(entering_graph)),
     ));
 
     // chairs
@@ -277,55 +500,61 @@ fn setup(
 
     let script = assets.load("nonfinal/testscript.txt");
     let script_choices_entity = commands.spawn_empty().id();
-    let mut script_runner = ScriptRunner::new(script.clone(), script_choices_entity, 10.0);
+    let mut script_runner = ScriptRunner::new(script.clone(), script_choices_entity, 15.0);
     script_runner.pause();
-    let root = commands.spawn((
-        Node {
-            align_self: AlignSelf::Stretch,
-            justify_self: JustifySelf::Stretch,
-            flex_wrap: FlexWrap::NoWrap,
-            justify_content: JustifyContent::Stretch,
-            align_items: AlignItems::Stretch,
-            align_content: AlignContent::Stretch,
-            width: Val::Vw(100.),
-            height: Val::Vh(100.),
-            ..default()
-        },
-        UiRoot,
-    )).id();
+    let root = commands
+        .spawn((
+            Node {
+                align_self: AlignSelf::Stretch,
+                justify_self: JustifySelf::Stretch,
+                flex_wrap: FlexWrap::NoWrap,
+                justify_content: JustifyContent::Stretch,
+                align_items: AlignItems::Stretch,
+                align_content: AlignContent::Stretch,
+                width: Val::Vw(100.),
+                height: Val::Vh(100.),
+                ..default()
+            },
+            UiRoot,
+        ))
+        .id();
 
     // start ui
-    let start_screen = commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            align_self: AlignSelf::Stretch,
-            justify_self: JustifySelf::Stretch,
-            justify_content: JustifyContent::Center,
-            justify_items: JustifyItems::Center,
-            align_content: AlignContent::Center,
-            align_items: AlignItems::Center,
-            width: Val::Vw(100.),
-            height: Val::Vh(100.),
-            ..default()
-        },
-        BackgroundColor(Color::linear_rgb(0.286, 0., 0.4)),
-        Visibility::Inherited,
-        StartUiRoot,
-    )).id();
-    let start_text = commands.spawn((
-        Node {
-            align_self: AlignSelf::Center,
-            justify_self: JustifySelf::Center,
-            ..default()
-        },
-        Text("loading...".into()),
-        TextFont {
-            font_size: 50.,
-            ..default()
-        },
-        Button,
-        StartButton,
-    )).id();
+    let start_screen = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                align_self: AlignSelf::Stretch,
+                justify_self: JustifySelf::Stretch,
+                justify_content: JustifyContent::Center,
+                justify_items: JustifyItems::Center,
+                align_content: AlignContent::Center,
+                align_items: AlignItems::Center,
+                width: Val::Vw(100.),
+                height: Val::Vh(100.),
+                ..default()
+            },
+            BackgroundColor(Color::linear_rgb(0.286, 0., 0.4)),
+            Visibility::Inherited,
+            StartUiRoot,
+        ))
+        .id();
+    let start_text = commands
+        .spawn((
+            Node {
+                align_self: AlignSelf::Center,
+                justify_self: JustifySelf::Center,
+                ..default()
+            },
+            Text("loading...".into()),
+            TextFont {
+                font_size: 50.,
+                ..default()
+            },
+            Button,
+            StartButton,
+        ))
+        .id();
     commands.entity(start_screen).observe(on_start_clicked);
     commands.entity(start_text).observe(on_start_clicked);
     commands.entity(root).add_child(start_screen);
@@ -359,7 +588,7 @@ fn setup(
             height: Val::Percent(20.),
             margin: UiRect::horizontal(Val::VMin(5.)),
             ..default()
-        }, ))
+        },))
         .id();
     let text_visible_box = commands
         .spawn((
@@ -435,9 +664,9 @@ fn setup(
 fn on_start_clicked(
     trigger: Trigger<Pointer<Click>>,
     mut commands: Commands,
-    loaded: Res<State<Loaded>>, 
+    loaded: Res<State<Loaded>>,
     progress: Res<State<Progress>>,
-    mut next_progress: ResMut<NextState<Progress>>
+    mut next_progress: ResMut<NextState<Progress>>,
 ) {
     if !**loaded.get() {
         return;
@@ -468,10 +697,10 @@ fn on_text_visible_box_clicked(
 }
 
 fn on_start_show(
-    trigger: Trigger<RunnerUpdated>, 
+    trigger: Trigger<RunnerUpdated>,
     mut commands: Commands,
     mut video_streams: ResMut<Assets<VideoStream>>,
-    future_video_players: Query<(Entity, &FutureVideoPlayer)>
+    future_video_players: Query<(Entity, &FutureVideoPlayer)>,
 ) {
     if *trigger.event() == RunnerUpdated::StartShow {
         for (_, video) in video_streams.iter_mut() {
@@ -490,16 +719,11 @@ fn on_video_finished(
     trigger: Trigger<VideoUpdated>,
     mut commands: Commands,
     video_streams: Res<Assets<VideoStream>>,
-    mut video_players: Query<
-        (
-            Entity,
-            AnyOf<(
-                &MeshMaterial3d<StandardMaterial>, 
-                &mut ScreenLight,
-            )>,
-            &VideoPlayer,
-        ), 
-    >,
+    mut video_players: Query<(
+        Entity,
+        AnyOf<(&MeshMaterial3d<StandardMaterial>, &mut ScreenLight)>,
+        &VideoPlayer,
+    )>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     script_runners: Query<Entity, With<ScriptRunner>>,
@@ -643,8 +867,12 @@ fn switch_to_theater_ui(
     theater_root: Query<Entity, With<TheaterUiRoot>>,
 ) {
     // i am too lazy to do the Option<&mut Visibility> dance
-    commands.entity(start_ui_root.single()).insert(Visibility::Hidden);
-    commands.entity(theater_root.single()).insert(Visibility::Inherited);
+    commands
+        .entity(start_ui_root.single())
+        .insert(Visibility::Hidden);
+    commands
+        .entity(theater_root.single())
+        .insert(Visibility::Inherited);
 }
 
 fn update(mut runners: Query<&mut ScriptRunner>, keyboard: Res<ButtonInput<KeyCode>>) {
@@ -690,20 +918,27 @@ fn main() {
         .add_systems(
             OnEnter(Loaded(true)),
             (
-                remove_waiting_for_loads, 
-                |mut start_button: Query<&mut Text, With<StartButton>>| { 
-                    start_button.single_mut().replace_range(.., "click anywhere to start");
+                remove_waiting_for_loads,
+                |mut start_button: Query<&mut Text, With<StartButton>>| {
+                    start_button
+                        .single_mut()
+                        .replace_range(.., "click anywhere to start");
                 },
                 |mut script_runners: Query<&mut ScriptRunner>| {
                     for mut runner in script_runners.iter_mut() {
                         runner.unpause();
                     }
-                }
+                },
             ),
         )
         .add_systems(
             OnEnter(Progress::Entering),
-            switch_to_theater_ui,
+            (
+                switch_to_theater_ui,
+                |mut yous: Query<&mut AnimationPlayer, With<You>>| {
+                    yous.single_mut().resume_all();
+                },
+            ),
         )
         .add_systems(Last, (debug_events::<RunnerUpdated>(),))
         .run();
