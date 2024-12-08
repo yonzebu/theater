@@ -476,14 +476,6 @@ impl ScriptRunner {
             runner.show_ended = true;
         }
         let Some(entry) = script.get_entry(runner.current_entry, runner.using_ended_entries) else {
-            if !runner.finished_section {
-                if runner.using_ended_entries {
-                    runner_commands.trigger(RunnerUpdated::FinishedEnd);
-                } else {
-                    runner_commands.trigger(RunnerUpdated::FinishedMain);
-                }
-                runner.finished_section = true;
-            }
             return;
         };
         match trigger.event() {
@@ -792,6 +784,14 @@ fn update_script_runner_text(
         loop {
             let Some(entry) = script.get_entry(runner.current_entry, runner.using_ended_entries)
             else {
+                if !runner.finished_section {
+                    if runner.using_ended_entries {
+                        commands.trigger_targets(RunnerUpdated::FinishedEnd, runner_entity);
+                    } else {
+                        commands.trigger_targets(RunnerUpdated::FinishedMain, runner_entity);
+                    }
+                    runner.finished_section = true;
+                }
                 // we failed to get the current entry, which means we are not displaying ANYTHING,
                 // but the show has ended, so we should definitely use the ending entries
                 if runner.show_ended && !runner.using_ended_entries {
@@ -884,7 +884,6 @@ fn update_script_runner_text(
                     break;
                 }
                 (ScriptEntry::StartShow, _) => {
-                    commands.trigger(RunnerUpdated::StartShow);
                     commands.trigger_targets(RunnerUpdated::StartShow, runner_entity);
                     runner.reset_display();
                     text.0.clear();

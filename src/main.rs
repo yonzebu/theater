@@ -32,9 +32,7 @@ mod video;
 use util::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Event)]
-enum AnimationUpdated {
-    Finished,
-}
+struct AnimationFinished;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, States)]
 enum Progress {
@@ -43,7 +41,6 @@ enum Progress {
     Entering,
     Preshow,
     Show,
-    EarlyLeave,
     Postshow,
     Leaving,
     End,
@@ -225,7 +222,7 @@ fn setup(
         Mesh3d(rectangle.clone()),
         MeshMaterial3d(black.clone()),
         Transform {
-            translation: vec3(0., 2.5, -9.9),
+            translation: vec3(0., 2.5, SCREEN_POS * 1.01),
             scale: vec3(18.5, 0.5 + 18. * 9. / 16., 1.),
             ..default()
         },
@@ -258,24 +255,192 @@ fn setup(
         NotShadowCaster,
     ));
 
-    let me_image = assets.load("me.png");
-    let me_mesh = assets.load("me.glb#Mesh0/Primitive0");
-    commands.spawn((
-        Mesh3d(me_mesh.clone()),
-        MeshMaterial3d(papers.add(ExtendedMaterial {
-            base: StandardMaterial::from(me_image.clone()),
-            extension: Paper {},
-        })),
-        Transform::from_xyz(-2., 0., -0.5)
-            .looking_to(Dir3::Y, Dir3::Z)
-            .with_scale(Vec3::ONE * 0.5),
-        WaitingForLoads,
-        Me,
-    ));
-    let mut entering_clip = AnimationClip::default();
-    let you_target_id = AnimationTargetId::from_name(&Name::new("you"));
     const STEP_UP_EASING: EaseFunction = EaseFunction::QuadraticIn;
     const STEP_DOWN_EASING: EaseFunction = EaseFunction::QuadraticOut;
+    let watching_rot = Transform::default().looking_to(Dir3::Y, Dir3::Z).rotation;
+    let enter_rot = Quat::from_rotation_y(f32::to_radians(45.)) * watching_rot;
+    let look_right_rot = Quat::from_rotation_y(f32::to_radians(-45.)) * watching_rot;
+    let look_left_rot = Quat::from_rotation_y(f32::to_radians(45.)) * watching_rot;
+
+    let mut leaving_clip = AnimationClip::default();
+    let me_target_id = AnimationTargetId::from_name(&Name::new("me"));
+    // translation (very ugly, there aren't many good dynamic ways to construct curves right now i don't think)
+    leaving_clip.add_curve_to_target(
+        me_target_id,
+        AnimatableCurve::new(
+            animated_field!(Transform::translation),
+            // stand up
+            EasingCurve::new(
+                vec3(-2., 0., -0.5),
+                vec3(-2., 1., -0.75),
+                EaseFunction::ExponentialOut,
+            )
+            .reparametrize_linear(Interval::new(0., 0.25).unwrap())
+            .unwrap()
+            // stay still (start rotating at 0.5)
+            .chain(ConstantCurve::new(
+                Interval::new(0.25, 1.).unwrap(),
+                vec3(-2., 1., -0.75),
+            ))
+            .unwrap()
+            .chain(
+                // step 1 up
+                EasingCurve::new(vec3(-2., 1., -0.75), vec3(-2.4, 1.1, -0.75), STEP_UP_EASING)
+                    .reparametrize_linear(Interval::new(1., 1.5).unwrap())
+                    .unwrap(),
+            )
+            .unwrap()
+            // step 1 down
+            .chain(
+                EasingCurve::new(
+                    vec3(-2.4, 1.1, -0.75),
+                    vec3(-2.8, 1., -0.75),
+                    STEP_DOWN_EASING,
+                )
+                .reparametrize_linear(Interval::new(1.5, 2.).unwrap())
+                .unwrap(),
+            )
+            .unwrap()
+            // step 2 up
+            .chain(
+                EasingCurve::new(
+                    vec3(-2.8, 1., -0.75),
+                    vec3(-3.2, 1.1, -0.75),
+                    STEP_UP_EASING,
+                )
+                .reparametrize_linear(Interval::new(2., 2.5).unwrap())
+                .unwrap(),
+            )
+            .unwrap()
+            // step 2 down
+            .chain(
+                EasingCurve::new(
+                    vec3(-3.2, 1.1, -0.75),
+                    vec3(-3.6, 1., -0.75),
+                    STEP_DOWN_EASING,
+                )
+                .reparametrize_linear(Interval::new(2.5, 3.).unwrap())
+                .unwrap(),
+            )
+            .unwrap()
+            // step 3 up
+            .chain(
+                EasingCurve::new(vec3(-3.6, 1., -0.75), vec3(-4., 1.1, -0.75), STEP_UP_EASING)
+                    .reparametrize_linear(Interval::new(3., 3.5).unwrap())
+                    .unwrap(),
+            )
+            .unwrap()
+            // step 3 down
+            .chain(
+                EasingCurve::new(
+                    vec3(-4., 1.1, -0.75),
+                    vec3(-4.4, 1., -0.75),
+                    STEP_DOWN_EASING,
+                )
+                .reparametrize_linear(Interval::new(3.5, 4.).unwrap())
+                .unwrap(),
+            )
+            .unwrap()
+            // step 4 up
+            .chain(
+                EasingCurve::new(
+                    vec3(-4.4, 1., -0.75),
+                    vec3(-4.8, 1.1, -0.75),
+                    STEP_UP_EASING,
+                )
+                .reparametrize_linear(Interval::new(4., 4.5).unwrap())
+                .unwrap(),
+            )
+            .unwrap()
+            // step 4 down
+            .chain(
+                EasingCurve::new(
+                    vec3(-4.8, 1.1, -0.75),
+                    vec3(-5.2, 1., -0.75),
+                    STEP_DOWN_EASING,
+                )
+                .reparametrize_linear(Interval::new(4.5, 5.).unwrap())
+                .unwrap(),
+            )
+            .unwrap()
+            // step 5 up
+            .chain(
+                EasingCurve::new(
+                    vec3(-5.2, 1., -0.75),
+                    vec3(-5.6, 1.1, -0.75),
+                    STEP_UP_EASING,
+                )
+                .reparametrize_linear(Interval::new(5., 5.5).unwrap())
+                .unwrap(),
+            )
+            .unwrap()
+            // step 5 down
+            .chain(
+                EasingCurve::new(
+                    vec3(-5.6, 1.1, -0.75),
+                    vec3(-6., 1., -0.75),
+                    STEP_DOWN_EASING,
+                )
+                .reparametrize_linear(Interval::new(5.5, 6.).unwrap())
+                .unwrap(),
+            )
+            .unwrap(),
+        ),
+    );
+    // all rotation in the animation
+    leaving_clip.add_curve_to_target(
+        me_target_id,
+        AnimatableCurve::new(
+            animated_field!(Transform::rotation),
+            // steps
+            ConstantCurve::new(Interval::new(0., 0.5).unwrap(), watching_rot)
+                // look left
+                .chain(
+                    EasingCurve::new(enter_rot, look_left_rot, EaseFunction::BackOut)
+                        .reparametrize_linear(Interval::new(0.5, 1.).unwrap())
+                        .unwrap(),
+                )
+                .unwrap(),
+        ),
+    );
+    leaving_clip.add_event(6., AnimationFinished);
+    let (leaving_graph, leaving_index) = AnimationGraph::from_clip(animations.add(leaving_clip));
+    let mut me_anim_player = AnimationPlayer::default();
+    me_anim_player
+        .play(leaving_index)
+        .set_repeat(RepeatAnimation::Never)
+        .pause();
+
+    let me_image = assets.load("me.png");
+    let me_mesh = assets.load("me.glb#Mesh0/Primitive0");
+    let me_entity = commands
+        .spawn((
+            Mesh3d(me_mesh.clone()),
+            MeshMaterial3d(papers.add(ExtendedMaterial {
+                base: StandardMaterial::from(me_image.clone()),
+                extension: Paper {},
+            })),
+            Transform::from_xyz(-2., 0., -0.5)
+                .looking_to(Dir3::Y, Dir3::Z)
+                .with_scale(Vec3::ONE * 0.5),
+            WaitingForLoads,
+            Me,
+        ))
+        .id();
+    commands
+        .entity(me_entity)
+        .insert((
+            AnimationTarget {
+                id: me_target_id,
+                player: me_entity,
+            },
+            me_anim_player,
+            AnimationGraphHandle(anim_graphs.add(leaving_graph)),
+        ))
+        .observe(on_leave_animation_finished);
+
+    let mut entering_clip = AnimationClip::default();
+    let you_target_id = AnimationTargetId::from_name(&Name::new("you"));
     // translation (very ugly, there aren't many good dynamic ways to construct curves right now i don't think)
     entering_clip.add_curve_to_target(
         you_target_id,
@@ -379,10 +544,6 @@ fn setup(
                 .unwrap(),
         ),
     );
-    let watching_rot = Transform::default().looking_to(Dir3::Y, Dir3::Z).rotation;
-    let enter_rot = Quat::from_rotation_y(f32::to_radians(30.)) * watching_rot;
-    let look_right_rot = Quat::from_rotation_y(f32::to_radians(-45.)) * watching_rot;
-    let look_left_rot = Quat::from_rotation_y(f32::to_radians(45.)) * watching_rot;
     // all rotation in the animation
     entering_clip.add_curve_to_target(
         you_target_id,
@@ -425,7 +586,7 @@ fn setup(
                 .unwrap(),
         ),
     );
-    entering_clip.add_event(8.5, AnimationUpdated::Finished);
+    entering_clip.add_event(8.5, AnimationFinished);
     let (entering_graph, entering_index) = AnimationGraph::from_clip(animations.add(entering_clip));
     let mut you_anim_player = AnimationPlayer::default();
     you_anim_player
@@ -610,7 +771,10 @@ fn setup(
         .add_child(text_visible_box);
     commands.entity(text_visible_box).add_child(script_runner);
     commands.entity(script_runner).observe(
-        move |trigger: Trigger<RunnerUpdated>, mut commands: Commands| match trigger.event() {
+        move |trigger: Trigger<RunnerUpdated>,
+              mut commands: Commands,
+              progress: Res<State<Progress>>,
+              mut next_progress: ResMut<NextState<Progress>>| match trigger.event() {
             RunnerUpdated::HideText => {
                 commands.entity(text_box_wrapper).insert(Visibility::Hidden);
             }
@@ -618,6 +782,14 @@ fn setup(
                 commands
                     .entity(text_box_wrapper)
                     .insert(Visibility::Inherited);
+            }
+            RunnerUpdated::FinishedMain => {
+                debug_assert_eq!(progress.get(), &Progress::Show);
+                next_progress.set(Progress::Postshow);
+            }
+            RunnerUpdated::FinishedEnd => {
+                debug_assert_eq!(progress.get(), &Progress::Postshow);
+                next_progress.set(Progress::Leaving);
             }
             _ => {}
         },
@@ -671,9 +843,7 @@ fn on_start_clicked(
     if !**loaded.get() {
         return;
     }
-    if *progress.get() != Progress::Start {
-        panic!();
-    }
+    debug_assert_eq!(progress.get(), &Progress::Start);
     next_progress.set(Progress::Entering);
 }
 
@@ -719,8 +889,18 @@ fn on_start_show(
     }
 }
 
+fn on_leave_animation_finished(
+    trigger: Trigger<AnimationFinished>,
+    progress: Res<State<Progress>>,
+    mut next_progress: ResMut<NextState<Progress>>,
+) {
+    // do something? fade to black?
+    debug_assert_eq!(progress.get(), &Progress::Leaving);
+    next_progress.set(Progress::End);
+}
+
 fn on_enter_animation_finished(
-    trigger: Trigger<AnimationUpdated>,
+    trigger: Trigger<AnimationFinished>,
     mut script_runners: Query<&mut ScriptRunner>,
     progress: Res<State<Progress>>,
     mut next_progress: ResMut<NextState<Progress>>,
@@ -936,7 +1116,7 @@ fn main() {
                 |mut start_button: Query<&mut Text, With<StartButton>>| {
                     start_button
                         .single_mut()
-                        .replace_range(.., "click anywhere to start");
+                        .replace_range(.., "click anywhere to start\nselect options with the mouse");
                 },
             ),
         )
@@ -948,6 +1128,12 @@ fn main() {
                     yous.single_mut().resume_all();
                 },
             ),
+        )
+        .add_systems(
+            OnEnter(Progress::Leaving),
+            (|mut mes: Query<&mut AnimationPlayer, With<Me>>| {
+                mes.single_mut().resume_all();
+            },),
         )
         .add_systems(Last, (debug_events::<RunnerUpdated>(),))
         .run();
