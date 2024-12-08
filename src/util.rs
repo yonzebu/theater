@@ -1,4 +1,4 @@
-use std::{any::TypeId, borrow::Cow, fmt::Debug, marker::PhantomData, sync::Arc};
+use std::{any::TypeId, borrow::Cow, fmt::Debug, marker::PhantomData, mem::{ManuallyDrop, MaybeUninit}, sync::Arc};
 
 use bevy::{
     animation::{AnimationEvaluationError, AnimationTargetId, RepeatAnimation},
@@ -112,46 +112,22 @@ impl<S1: States, S2: States> ComputedStates for StatePair<S1, S2> {
     }
 }
 
-pub trait DynCurveChainCompatible<T>: Curve<T> + Debug + 'static + Send + Sync {}
-impl<T, C> DynCurveChainCompatible<T> for C where C: Curve<T> + Debug + 'static + Send + Sync {}
-
-/// Curves are composed as if with chain_continue. This is an ugly hack.
-#[derive(Clone, Debug, Default, Reflect)]
-pub struct DynCurveChain<T> {
-    #[reflect(ignore)]
-    current_curve: Option<Arc<dyn DynCurveChainCompatible<T>>>,
+// i didn't find an implementation of this i liked in a quick search and it's really easy to write so i just wrote it
+pub struct DropGuard<F: FnOnce()> {
+    f: ManuallyDrop<F>
 }
 
-impl<T: VectorSpace + 'static + Send + Sync> DynCurveChain<T> {
-    pub fn new() -> Self {
-        DynCurveChain {
-            current_curve: None,
-        }
-    }
-
-    pub fn append_curve(&mut self, curve: impl DynCurveChainCompatible<T>) {
-        if let Some(old_curve) = self.current_curve.take() {
-            self.current_curve = Some(Arc::new(old_curve.chain_continue(curve).unwrap()));
-        } else {
-            self.current_curve = Some(Arc::new(curve))
+impl<F: FnOnce()> Drop for DropGuard<F> {
+    fn drop(&mut self) {
+        // SAFETY: self.f is not used again after self is dropped
+        unsafe {
+            ManuallyDrop::take(&mut self.f)()
         }
     }
 }
 
-impl<T: TypePath> Curve<T> for DynCurveChain<T> {
-    fn domain(&self) -> Interval {
-        if let Some(curve) = self.current_curve.as_ref() {
-            curve.domain()
-        } else {
-            Interval::EVERYWHERE
-        }
-    }
-    fn sample(&self, t: f32) -> Option<T> {
-        self.current_curve
-            .as_ref()
-            .and_then(|curve| curve.sample(t))
-    }
-    fn sample_unchecked(&self, t: f32) -> T {
-        self.current_curve.as_ref().unwrap().sample_unchecked(t)
+pub fn drop_guard<F: FnOnce()>(f: F) -> DropGuard<F> {
+    DropGuard {
+        f: ManuallyDrop::new(f)
     }
 }
