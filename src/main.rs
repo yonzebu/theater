@@ -19,7 +19,7 @@ use debug::*;
 use screen_light::{
     ScreenLight, ScreenLightExtension, ScreenLightExtensionPlugin, ScreenLightPlugin,
 };
-use script::{RunnerUpdated, ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner};
+use script::{RunnerUpdated, ScriptChoice, ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner};
 use video::{
     VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream, VideoStreamSettings, VideoUpdated,
 };
@@ -571,12 +571,15 @@ fn setup(
         .id();
 
     let text_box_wrapper = commands
-        .spawn((Node {
-            align_self: AlignSelf::Stretch,
-            height: Val::Percent(20.),
-            margin: UiRect::horizontal(Val::VMin(5.)),
-            ..default()
-        },))
+        .spawn((
+            Node {
+                align_self: AlignSelf::Stretch,
+                height: Val::Percent(20.),
+                margin: UiRect::horizontal(Val::VMin(5.)),
+                ..default()
+            },
+            Visibility::Hidden,
+        ))
         .id();
     let text_visible_box = commands
         .spawn((
@@ -612,11 +615,16 @@ fn setup(
     commands.entity(text_visible_box).add_child(script_runner);
     commands
         .entity(script_runner)
-        .observe(|trigger: Trigger<RunnerUpdated>| match trigger.event() {
-            RunnerUpdated::HideText | RunnerUpdated::ShowText => {
-                println!("received updated: {:?}", trigger.event());
+        .observe(move |trigger: Trigger<RunnerUpdated>, mut commands: Commands| {
+            match trigger.event() {
+                RunnerUpdated::HideText => {
+                    commands.entity(text_box_wrapper).insert(Visibility::Hidden);
+                } 
+                RunnerUpdated::ShowText => {
+                    commands.entity(text_box_wrapper).insert(Visibility::Inherited);
+                }
+                _ => {}
             }
-            _ => {}
         });
 
     let choice_box_wrapper = commands
@@ -919,11 +927,6 @@ fn main() {
                     start_button
                         .single_mut()
                         .replace_range(.., "click anywhere to start");
-                },
-                |mut script_runners: Query<&mut ScriptRunner>| {
-                    for mut runner in script_runners.iter_mut() {
-                        runner.unpause();
-                    }
                 },
             ),
         )

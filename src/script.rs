@@ -481,6 +481,12 @@ impl ScriptRunner {
             runner_commands.trigger(RunnerUpdated::NoScript);
             return;
         };
+        // this is handled early so that the runner will ALWAYS be told if the show ends, assuming
+        // it has a valid script. if this isn't handled early, a runner that finished the main entries
+        // won't be told the show has ended
+        if *trigger.event() == UpdateRunner::ShowEnded {
+            runner.show_ended = true;
+        }
         let Some(entry) = script.get_entry(runner.current_entry, runner.using_ended_entries) else {
             runner_commands.trigger(RunnerUpdated::Finished);
             return;
@@ -586,9 +592,8 @@ impl ScriptRunner {
                     commands.trigger_targets(RunnerUpdated::HideChoices, runner.choices_display);
                 }
             },
-            UpdateRunner::ShowEnded => {
-                runner.show_ended = true;
-            }
+            // handled above
+            UpdateRunner::ShowEnded => {}
         }
     }
     fn on_runner_updated(
@@ -655,8 +660,10 @@ impl ScriptChoices {
         scripts: Res<Assets<Script>>,
     ) {
         match trigger.event() {
-            RunnerUpdated::HideText | RunnerUpdated::ShowText => {}
-            RunnerUpdated::HideChoices | RunnerUpdated::Finished | RunnerUpdated::NoScript => {
+            RunnerUpdated::HideText 
+            | RunnerUpdated::HideChoices 
+            | RunnerUpdated::Finished 
+            | RunnerUpdated::NoScript => {
                 if let Some(mut choices_commands) = commands.get_entity(trigger.entity()) {
                     if let Ok((mut choices_display, children)) =
                         choices_displays.get_mut(trigger.entity())
@@ -682,7 +689,7 @@ impl ScriptChoices {
                     }
                 }
             }
-            RunnerUpdated::ShowChoices => {
+            RunnerUpdated::ShowChoices | RunnerUpdated::ShowText => {
                 let (Some(mut choices_commands), Ok((mut choices_display, _))) = (
                     commands.get_entity(trigger.entity()),
                     choices_displays.get_mut(trigger.entity()),
@@ -728,7 +735,11 @@ impl ScriptChoices {
     }
 }
 
-#[derive(Component)]
+/// Added to each of the UI elements that holds the text for a given possible response to a script
+/// prompt. These UI elements are spawned as children of the entity with [`ScriptChoices`] and
+/// (currently) not checked for whether they have any other relevant components (although a 
+/// [`Text`] component is initially inserted).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Component, Reflect)]
 #[require(Text)]
 #[component(on_add = ScriptChoice::on_add)]
 pub struct ScriptChoice(usize);
@@ -760,12 +771,12 @@ impl ScriptChoice {
     }
     fn on_start_hover(trigger: Trigger<Pointer<Over>>, mut commands: Commands) {
         if let Some(mut commands) = commands.get_entity(trigger.entity()) {
-            commands.insert(BackgroundColor(Color::srgba(0.867, 0.75, 0.93, 0.5)));
+            commands.insert(TextColor(Color::linear_rgb(0.5, 0.5, 0.5)));
         }
     }
     fn on_stop_hover(trigger: Trigger<Pointer<Out>>, mut commands: Commands) {
         if let Some(mut commands) = commands.get_entity(trigger.entity()) {
-            commands.insert(BackgroundColor(Color::srgba(0.8, 0.43, 1., 0.)));
+            commands.insert(TextColor::default());
         }
     }
 }
@@ -777,6 +788,9 @@ fn update_script_runner_text(
     time: Res<Time>,
 ) {
     'runners: for (runner_entity, mut runner, mut text) in runners.iter_mut() {
+        if runner.paused() {
+            continue;
+        }
         let runner = &mut *runner;
         runner.display_ticks += runner
             .display_timer
@@ -790,6 +804,17 @@ fn update_script_runner_text(
         loop {
             let Some(entry) = script.get_entry(runner.current_entry, runner.using_ended_entries)
             else {
+                // we failed to get the current entry, which means we are not displaying ANYTHING,
+                // but the show has ended, so we should definitely use the ending entries
+                if runner.show_ended && !runner.using_ended_entries {
+                    runner.next_entry();
+                    continue;
+                } else if runner.showing_text {
+                    // if we failed to get the current entry, either the runner's in an invalid state,
+                    // or we hit the end, in both cases text should be hidden
+                    commands.entity(runner_entity).trigger(RunnerUpdated::HideText);
+                    runner.showing_text = false;
+                }
                 continue 'runners;
             };
             let current_answer = runner.current_answer;
