@@ -179,7 +179,7 @@ fn setup(
     commands.add_observer(on_start_show);
     commands.add_observer(on_video_finished);
     let video_stream = assets.load_with_settings(
-        "nonfinal/testshow.mp4",
+        "show.mp4",
         |settings: &mut VideoStreamSettings| {
             // mips are too slow to use and i don't have time/want to improve them right now
             settings.use_mips = false;
@@ -196,14 +196,14 @@ fn setup(
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::all(),
     ));
-    // commands.spawn((
-    //     AudioPlayer(video_stream.clone()),
-    //     PlaybackSettings {
-    //         mode: PlaybackMode::Once,
-    //         paused: true,
-    //         ..default()
-    //     },
-    // ));
+    commands.spawn((
+        AudioPlayer(video_stream.clone()),
+        PlaybackSettings {
+            mode: PlaybackMode::Once,
+            paused: true,
+            ..default()
+        },
+    ));
     commands.spawn((
         // keep transform synced with screen transform
         Transform::from_xyz(0., 2.5, SCREEN_LIGHT_POS).looking_to(Dir3::Z, Dir3::Y),
@@ -664,7 +664,7 @@ fn setup(
         }
     }
 
-    let script = assets.load("nonfinal/testscript.txt");
+    let script = assets.load("script.txt");
     let script_choices_entity = commands.spawn_empty().id();
     let mut script_runner = ScriptRunner::new(script.clone(), script_choices_entity, 15.0);
     script_runner.pause();
@@ -1386,7 +1386,6 @@ fn main() {
         .add_plugins((
             DefaultPlugins,
             MaterialPlugin::<ExtendedMaterial<StandardMaterial, Paper>>::default(),
-            DebugPlugin,
             VideoPlugin,
             VideoPlayerPlugin::<MeshMaterial3d<StandardMaterial>>::default(),
             VideoPlayerPlugin::<ScreenLight>::default(),
