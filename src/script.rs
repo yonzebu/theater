@@ -21,7 +21,6 @@ use nom::{
 pub struct Answer {
     pub answer: String,
     pub response: String,
-    pub is_end: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,14 +118,6 @@ fn answer(lines: &str) -> IResult<&str, &str> {
     )(lines)
 }
 
-fn end(lines: &str) -> IResult<&str, &str> {
-    delimited(
-        line_starter("!"),
-        till_newline1.map(str::trim),
-        Parser::or(line_ending, eof),
-    )(lines)
-}
-
 fn line(lines: &str) -> IResult<&str, &str> {
     verify(
         terminated(till_newline1.map(str::trim), Parser::or(line_ending, eof)),
@@ -170,22 +161,12 @@ fn prompt_block(lines: &str) -> IResult<&str, ScriptEntry> {
         alt((
             tuple((skip_while(empty, answer), peek(skip_while(empty, prompt))))
                 .map(|(answer, _)| AnswerBlock::Single(answer.into())),
-            many0(alt((
-                tuple((skip_while(empty, answer), skip_while(empty, end))).map(|(answer, line)| {
-                    Answer {
-                        answer: answer.into(),
-                        response: line.into(),
-                        is_end: true,
-                    }
-                }),
-                tuple((skip_while(empty, answer), skip_while(empty, line))).map(
-                    |(answer, line)| Answer {
-                        answer: answer.into(),
-                        response: line.into(),
-                        is_end: false,
-                    },
-                ),
-            )))
+            many0(tuple((skip_while(empty, answer), skip_while(empty, line))).map(
+                |(answer, line)| Answer {
+                    answer: answer.into(),
+                    response: line.into(),
+                },
+            ))
             .map(AnswerBlock::Many),
         )),
     )))(lines)?;
@@ -542,20 +523,10 @@ impl ScriptRunner {
                     },
                     Some(current_answer),
                 ) => {
-                    if answers
-                        .get(current_answer)
-                        .map_or(false, |answer| answer.is_end)
-                    {
-                        runner.current_entry = usize::MAX;
-                        runner.current_answer = None;
-                        text.0.clear();
-                        runner.reset_display();
-                    } else {
-                        runner.current_answer = None;
-                        text.0.clear();
-                        runner.reset_display();
-                        runner.next_entry();
-                    }
+                    runner.current_answer = None;
+                    text.0.clear();
+                    runner.reset_display();
+                    runner.next_entry();
                 }
                 (ScriptEntry::Line(_), Some(_))
                 | (
@@ -1026,12 +997,10 @@ mod tests {
                             Answer {
                                 answer: "next 1".into(),
                                 response: "next response 1".into(),
-                                is_end: false
                             },
                             Answer {
                                 answer: "next 2".into(),
                                 response: "next response 2".into(),
-                                is_end: false
                             },
                         ])
                     }
@@ -1039,7 +1008,7 @@ mod tests {
             })
         );
 
-        let multi_answer = ">prompt\n\n\r\n- answer1  \r\n response1\t\n-answer2\r\nresponse2\n-end answer\n\r\n!end response";
+        let multi_answer = ">prompt\n\n\r\n- answer1  \r\n response1\t\n-answer2\r\nresponse2\n";
         assert_eq!(
             Script::from_raw(multi_answer),
             Ok(Script {
@@ -1050,17 +1019,10 @@ mod tests {
                         Answer {
                             answer: "answer1".into(),
                             response: "response1".into(),
-                            is_end: false
                         },
                         Answer {
                             answer: "answer2".into(),
                             response: "response2".into(),
-                            is_end: false
-                        },
-                        Answer {
-                            answer: "end answer".into(),
-                            response: "end response".into(),
-                            is_end: true
                         },
                     ])
                 }])
@@ -1136,7 +1098,6 @@ mod tests {
                         choices: AnswerBlock::Many(vec![Answer {
                             answer: "answer".into(),
                             response: "response".into(),
-                            is_end: false
                         }])
                     },
                     ScriptEntry::Line("line 2".into()),
