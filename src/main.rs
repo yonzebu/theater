@@ -1,14 +1,12 @@
-#![allow(unused, clippy::type_complexity, clippy::too_many_arguments)]
+#![allow(clippy::type_complexity, clippy::too_many_arguments)]
 use core::fmt::Debug;
 
 use bevy::animation::{animated_field, AnimationTarget, AnimationTargetId, RepeatAnimation};
 use bevy::asset::{RenderAssetUsages, UntypedAssetId};
 use bevy::audio::PlaybackMode;
-use bevy::color::ColorCurve;
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::world::DeferredWorld;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, NotShadowCaster};
-use bevy::reflect::Reflectable;
 use bevy::render::render_resource::{
     AsBindGroup, Extent3d, Face, ShaderRef, TextureDimension, TextureFormat,
 };
@@ -17,12 +15,8 @@ use bevy::{math::vec3, prelude::*};
 
 mod debug;
 use debug::*;
-use screen_light::{
-    ScreenLight, ScreenLightExtension, ScreenLightExtensionPlugin, ScreenLightPlugin,
-};
-use script::{
-    RunnerUpdated, Script, ScriptChoice, ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner,
-};
+use screen_light::{ScreenLight, ScreenLightExtension, ScreenLightPlugin};
+use script::{RunnerUpdated, ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner};
 use video::{
     VideoFinished, VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream, VideoStreamSettings,
 };
@@ -112,12 +106,8 @@ struct You;
 #[component(storage = "SparseSet")]
 struct Me;
 
-#[derive(Component)]
-struct FadeOutIndex(AnimationNodeIndex);
-
 const CHAIR_ROWS: i32 = 5;
 const CHAIR_COLS: i32 = 5;
-const CHAIR_COUNT: i32 = 25;
 const SCREEN_POS: f32 = -9.9;
 const SCREEN_WIDTH: f32 = 18.;
 const SCREEN_HEIGHT: f32 = SCREEN_WIDTH * 9. / 16.;
@@ -178,13 +168,11 @@ fn setup(
     commands.spawn((Camera3d::default(), Transform::from_xyz(0., 2., 5.)));
     commands.add_observer(on_start_show);
     commands.add_observer(on_video_finished);
-    let video_stream = assets.load_with_settings(
-        "show.mp4",
-        |settings: &mut VideoStreamSettings| {
+    let video_stream =
+        assets.load_with_settings("show.mp4", |settings: &mut VideoStreamSettings| {
             // mips are too slow to use and i don't have time/want to improve them right now
             settings.use_mips = false;
-        },
-    );
+        });
     let screen_off_image = images.add(Image::new(
         Extent3d {
             width: 1,
@@ -701,7 +689,7 @@ fn setup(
                 height: Val::Vh(100.),
                 ..default()
             },
-            BackgroundColor(Color::linear_rgb(0.286, 0., 0.4)),
+            BackgroundColor(Color::linear_rgb(0., 0., 0.)),
             Visibility::Inherited,
             StartUiRoot,
         ))
@@ -859,12 +847,11 @@ fn setup(
 }
 
 fn on_start_clicked(
-    trigger: Trigger<Pointer<Click>>,
+    _trigger: Trigger<Pointer<Click>>,
     mut commands: Commands,
     start_text: Query<Entity, With<StartText>>,
     mut animations: ResMut<Assets<AnimationClip>>,
     mut anim_graphs: ResMut<Assets<AnimationGraph>>,
-    progress: Res<State<Progress>>,
     mut next_progress: ResMut<NextState<Progress>>,
     mut was_clicked: Local<bool>,
 ) {
@@ -872,7 +859,9 @@ fn on_start_clicked(
         return;
     }
     *was_clicked = true;
-    let Ok(start_text) = start_text.get_single() else { return; };
+    let Ok(start_text) = start_text.get_single() else {
+        return;
+    };
     let (target, player, graph) = alpha_fade_animation(
         1.,
         0.,
@@ -900,10 +889,7 @@ fn on_start_clicked(
 fn on_start_text_fade_out_finished(
     trigger: Trigger<AnimationFinished>,
     mut commands: Commands,
-    mut start_ui_root: Single<(Entity, &mut Node), With<StartUiRoot>>,
-    mut start_text: Query<&mut Text>,
-    mut animations: ResMut<Assets<AnimationClip>>,
-    mut anim_graphs: ResMut<Assets<AnimationGraph>>,
+    start_ui_root: Single<(Entity, &mut Node), With<StartUiRoot>>,
     loaded: Res<State<Loaded>>,
     progress: Res<State<Progress>>,
     mut next_progress: ResMut<NextState<Progress>>,
@@ -913,9 +899,9 @@ fn on_start_text_fade_out_finished(
     start_ui_node.align_items = AlignItems::End;
     commands.entity(trigger.entity()).despawn_recursive();
     debug_assert_eq!(progress.get(), &Progress::FadeOutStartText);
-    
+
     if !**loaded.get() {
-        let loading_text = commands
+        commands
             .spawn((
                 Node {
                     align_self: AlignSelf::End,
@@ -934,8 +920,7 @@ fn on_start_text_fade_out_finished(
                 },
                 LoadingText,
             ))
-            .set_parent(start_ui_root)
-            .id();
+            .set_parent(start_ui_root);
     }
     next_progress.set(Progress::FadeIn);
 }
@@ -944,7 +929,11 @@ fn hide_instructions_when_next_line_not_ignored(
     trigger: Trigger<RunnerUpdated>,
     mut instructions: Query<&mut Visibility, With<Instructions>>,
 ) {
-    if let RunnerUpdated::Received { update: UpdateRunner::NextLine, ignored: false } = trigger.event() {
+    if let RunnerUpdated::Received {
+        update: UpdateRunner::NextLine,
+        ignored: false,
+    } = trigger.event()
+    {
         for mut visibility in instructions.iter_mut() {
             *visibility = Visibility::Hidden;
         }
@@ -973,11 +962,9 @@ fn on_text_visible_box_clicked(
 fn on_runner_updated_update_ui(
     trigger: Trigger<RunnerUpdated>,
     mut commands: Commands,
-    scripts: Res<Assets<Script>>,
-    runners: Query<&ScriptRunner>,
     progress: Res<State<Progress>>,
     text_box_wrapper: Single<Entity, With<TextBoxWrapper>>,
-    mut instructions_text: Single<(Entity, &mut Text), With<Instructions>>,
+    instructions_text: Single<(Entity, &mut Text), With<Instructions>>,
     mut next_progress: ResMut<NextState<Progress>>,
 ) {
     let (instructions, mut instructions_text) = instructions_text.into_inner();
@@ -1048,7 +1035,7 @@ fn on_start_show(
 }
 
 fn on_leave_animation_finished(
-    trigger: Trigger<AnimationFinished>,
+    _trigger: Trigger<AnimationFinished>,
     progress: Res<State<Progress>>,
     mut next_progress: ResMut<NextState<Progress>>,
 ) {
@@ -1058,7 +1045,7 @@ fn on_leave_animation_finished(
 }
 
 fn on_enter_animation_finished(
-    trigger: Trigger<AnimationFinished>,
+    _trigger: Trigger<AnimationFinished>,
     mut script_runners: Query<&mut ScriptRunner>,
     progress: Res<State<Progress>>,
     mut next_progress: ResMut<NextState<Progress>>,
@@ -1080,7 +1067,6 @@ fn on_video_finished(
         &VideoPlayer,
     )>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut images: ResMut<Assets<Image>>,
     script_runners: Query<Entity, With<ScriptRunner>>,
     screen_off_image: Res<ScreenOffImage>,
     progress: Res<State<Progress>>,
@@ -1175,34 +1161,11 @@ fn update_chair_materials(
     }
 }
 
-fn update_video_player(
-    audio_players: Query<(&AudioPlayer<VideoStream>, &AudioSink)>,
-    mut video_streams: ResMut<Assets<VideoStream>>,
-    keyboard: Res<ButtonInput<KeyCode>>,
-) {
-    if keyboard.just_pressed(KeyCode::KeyV) {
-        for (_, video_stream) in video_streams.iter_mut() {
-            video_stream.playing = !video_stream.playing;
-            info!("video playing = {}", video_stream.playing);
-        }
-    }
-    for (audio_player, audio_sink) in audio_players.iter() {
-        if let Some(video_stream) = video_streams.get(audio_player.0.id()) {
-            if video_stream.playing {
-                audio_sink.play();
-            } else {
-                audio_sink.pause();
-            }
-        }
-    }
-}
-
 fn check_loaded_state(
     assets: Res<AssetServer>,
     mut to_load: ResMut<AssetsToLoad>,
     loaded: Res<State<Loaded>>,
     mut next_loaded: ResMut<NextState<Loaded>>,
-    keyboard: Res<ButtonInput<KeyCode>>
 ) {
     to_load.retain(|&id| assets.is_managed(id) && !assets.is_loaded(id));
     if to_load.is_empty() && !**loaded.get() {
@@ -1263,7 +1226,7 @@ fn fade_in_to_theater(
 }
 
 fn finish_fade_in_to_theater(
-    trigger: Trigger<AnimationFinished>,
+    _trigger: Trigger<AnimationFinished>,
     progress: Res<State<Progress>>,
     mut next_progress: ResMut<NextState<Progress>>,
 ) {
@@ -1368,19 +1331,6 @@ fn fade_to_black(
         .despawn_recursive();
 }
 
-fn update(mut runners: Query<&mut ScriptRunner>, keyboard: Res<ButtonInput<KeyCode>>) {
-    if !keyboard.just_pressed(KeyCode::KeyT) {
-        return;
-    }
-    for mut runner in runners.iter_mut() {
-        if runner.paused() {
-            runner.unpause();
-        } else {
-            runner.pause();
-        }
-    }
-}
-
 fn main() {
     App::new()
         .add_plugins((
@@ -1400,39 +1350,35 @@ fn main() {
         .add_systems(
             Update,
             (
-                (
-                    update_chair_materials,
-                    check_loaded_state.run_if(in_state(Loaded(false))),
-                )
-                    .chain(),
-                update,
-                update_video_player,
-            ),
+                update_chair_materials,
+                check_loaded_state.run_if(in_state(Loaded(false))),
+            )
+                .chain(),
         )
         .add_systems(
-            OnEnter(Loaded(true)), 
+            OnEnter(Loaded(true)),
             (
                 remove_waiting_for_loads,
                 |mut commands: Commands, loading_text: Query<Entity, With<LoadingText>>| {
                     for entity in loading_text.iter() {
                         commands.entity(entity).despawn_recursive();
                     }
-                }
-            )
+                },
+            ),
         )
         .add_systems(
             OnEnter(Progress::Entering),
             (
                 switch_to_theater_ui,
-                |mut yous: Single<&mut AnimationPlayer, With<You>>| {
-                    yous.into_inner().resume_all();
+                |you: Single<&mut AnimationPlayer, With<You>>| {
+                    you.into_inner().resume_all();
                 },
             ),
         )
         .add_systems(
             OnEnter(Progress::Leaving),
-            (|mut mes: Single<&mut AnimationPlayer, With<Me>>| {
-                mes.into_inner().resume_all();
+            (|me: Single<&mut AnimationPlayer, With<Me>>| {
+                me.into_inner().resume_all();
             },),
         )
         .add_systems(OnEnter(Progress::End), fade_to_black)

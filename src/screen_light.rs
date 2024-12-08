@@ -14,12 +14,11 @@ use bevy::ecs::entity::EntityHashMap;
 use bevy::ecs::system::lifetimeless::{Read, SQuery, SRes};
 use bevy::ecs::system::SystemParamItem;
 use bevy::pbr::{
-    prepare_lights, queue_material_meshes, queue_shadows, DrawPrepass, ExtendedMaterial,
-    LightViewEntities, MaterialPipeline, MaterialPipelineKey, MeshPipelineKey, NotShadowCaster,
-    PreparedMaterial, PrepassPipeline, PrepassPipelinePlugin, PrepassPlugin, RenderLightmaps,
-    RenderMaterialInstances, RenderMeshInstanceFlags, RenderMeshInstances,
-    RenderVisibleMeshEntities, Shadow, ShadowBinKey, ShadowView, SimulationLightSystems,
-    ViewLightEntities, VisibleMeshEntities,
+    prepare_lights, queue_shadows, DrawPrepass, ExtendedMaterial, LightViewEntities,
+    MaterialPipeline, MaterialPipelineKey, MeshPipelineKey, NotShadowCaster, PreparedMaterial,
+    PrepassPipeline, PrepassPipelinePlugin, PrepassPlugin, RenderMaterialInstances,
+    RenderMeshInstanceFlags, RenderMeshInstances, RenderVisibleMeshEntities, Shadow, ShadowBinKey,
+    ShadowView, SimulationLightSystems, ViewLightEntities, VisibleMeshEntities,
 };
 use bevy::render::camera::CameraProjection;
 use bevy::render::mesh::RenderMesh;

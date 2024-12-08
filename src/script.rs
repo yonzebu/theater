@@ -487,19 +487,18 @@ impl ScriptRunner {
         // assuming the entity was a ScriptRunner (with Text) to begin with
         // any further logic sets ignored to false if it processes the received update
         let ignored = Cell::new(true);
-        let drop_guard = drop_guard(|| {
+        let _drop_guard = drop_guard(|| {
             received_commands.trigger_targets(
                 RunnerUpdated::Received {
                     update: trigger.event().clone(),
-                    ignored: ignored.get()
+                    ignored: ignored.get(),
                 },
-                trigger.entity()
+                trigger.entity(),
             );
         });
         let mut runner_commands = commands.entity(runner_entity);
         let Some(script) = scripts.get(runner.script.id()) else {
-            runner_commands
-                .trigger(RunnerUpdated::NoScript);
+            runner_commands.trigger(RunnerUpdated::NoScript);
             return;
         };
         // this is handled early so that the runner will ALWAYS be told if the show ends, assuming
@@ -557,10 +556,10 @@ impl ScriptRunner {
                 (ScriptEntry::Prompt { .. }, None) => {}
                 (
                     ScriptEntry::Prompt {
-                        choices: AnswerBlock::Many(answers),
+                        choices: AnswerBlock::Many(_),
                         ..
                     },
-                    Some(current_answer),
+                    Some(_),
                 ) => {
                     runner.current_answer = None;
                     text.0.clear();
@@ -699,28 +698,26 @@ impl ScriptChoices {
             | RunnerUpdated::FinishedMain
             | RunnerUpdated::FinishedEnd
             | RunnerUpdated::NoScript => {
-                if let Some(mut choices_commands) = commands.get_entity(choices_entity) {
-                    if let Ok((mut choices_display, children)) =
-                        choices_displays.get_mut(choices_entity)
+                if let Ok((mut choices_display, children)) =
+                    choices_displays.get_mut(choices_entity)
+                {
+                    if !choices_display.displaying_choices {
+                        return;
+                    }
+                    choices_display.displaying_choices = false;
+                    for child in children
+                        .map(|children| children.deref())
+                        .unwrap_or(&[])
+                        .iter()
+                        .filter(|&&child| choices.contains(child))
+                        .copied()
                     {
-                        if !choices_display.displaying_choices {
-                            return;
-                        }
-                        choices_display.displaying_choices = false;
-                        for child in children
-                            .map(|children| children.deref())
-                            .unwrap_or(&[])
-                            .iter()
-                            .filter(|&&child| choices.contains(child))
-                            .copied()
-                        {
-                            commands.entity(child).despawn_recursive();
-                        }
-                        if let Ok(mut root_visibility) =
-                            with_visibility.get_mut(choices_display.choice_display_root)
-                        {
-                            *root_visibility = Visibility::Hidden;
-                        }
+                        commands.entity(child).despawn_recursive();
+                    }
+                    if let Ok(mut root_visibility) =
+                        with_visibility.get_mut(choices_display.choice_display_root)
+                    {
+                        *root_visibility = Visibility::Hidden;
                     }
                 }
             }
@@ -763,8 +760,8 @@ impl ScriptChoices {
                     | ScriptEntry::OnShowEnd => {}
                 }
             }
-            RunnerUpdated::StartShow 
-            | RunnerUpdated::FinishedLine 
+            RunnerUpdated::StartShow
+            | RunnerUpdated::FinishedLine
             | RunnerUpdated::Received { .. } => {}
         }
     }

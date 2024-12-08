@@ -3,19 +3,15 @@ use std::{
     marker::PhantomData,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicUsize, Ordering},
-        mpsc::{channel, Receiver, SendError, Sender, TryRecvError},
-        Arc, Mutex, PoisonError, RwLock, TryLockError,
+        mpsc::{channel, Receiver, Sender, TryRecvError},
+        Arc, Mutex, PoisonError,
     },
 };
 
 use bevy::{
-    asset::{meta::Settings, AssetLoader, RenderAssetUsages},
+    asset::{AssetLoader, RenderAssetUsages},
     audio::{self, AddAudioSource},
-    core_pipeline::{
-        blit::{self, BlitPipeline, BlitPipelineKey},
-        fullscreen_vertex_shader::fullscreen_shader_vertex_state,
-    },
+    core_pipeline::fullscreen_vertex_shader::fullscreen_shader_vertex_state,
     ecs::system::{lifetimeless::SResMut, StaticSystemParam, SystemParam},
     image::ImageSampler,
     prelude::*,
@@ -38,8 +34,7 @@ use bevy::{
         texture::GpuImage,
         Render, RenderApp, RenderSet,
     },
-    scene::serde,
-    tasks::{AsyncComputeTaskPool, ComputeTaskPool},
+    tasks::AsyncComputeTaskPool,
     utils::HashSet,
 };
 use ffmpeg_next::{
@@ -70,7 +65,6 @@ struct DecodedFrame {
 impl From<DecodedFrame> for Image {
     fn from(value: DecodedFrame) -> Self {
         let mut usage = TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING;
-        let mut data = value.data;
         if value.mip_levels > 1 {
             usage |= TextureUsages::RENDER_ATTACHMENT;
             //     let mut mip_level = 1;
@@ -110,7 +104,7 @@ impl From<DecodedFrame> for Image {
             //     }
         }
         Image {
-            data,
+            data: value.data,
             texture_descriptor: TextureDescriptor {
                 label: None,
                 size: Extent3d {
@@ -938,7 +932,6 @@ fn update_videos(
             let pts = frame.pts;
             let mip_levels = frame.mip_levels;
             let image: Image = frame.into();
-            let texture_format = image.texture_descriptor.format;
             let image = images.add(image);
             let image_id = image.id();
             video

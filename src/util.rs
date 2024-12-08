@@ -1,8 +1,7 @@
-use std::{any::TypeId, borrow::Cow, fmt::Debug, marker::PhantomData, mem::{ManuallyDrop, MaybeUninit}, sync::Arc};
+use std::{any::TypeId, borrow::Cow, fmt::Debug, marker::PhantomData, mem::ManuallyDrop};
 
 use bevy::{
     animation::{AnimationEvaluationError, AnimationTargetId, RepeatAnimation},
-    math::VectorSpace,
     prelude::*,
 };
 
@@ -42,7 +41,7 @@ impl<Src: Component, F: Send + Sync + 'static + Fn(&mut Src) -> &mut Color> Anim
         &self,
         entity: &'a mut bevy::animation::AnimationEntityMut,
     ) -> Result<&'a mut Self::Property, AnimationEvaluationError> {
-        let mut color_src =
+        let color_src =
             entity
                 .get_mut::<Src>()
                 .ok_or(AnimationEvaluationError::ComponentNotPresent(TypeId::of::<
@@ -114,20 +113,18 @@ impl<S1: States, S2: States> ComputedStates for StatePair<S1, S2> {
 
 // i didn't find an implementation of this i liked in a quick search and it's really easy to write so i just wrote it
 pub struct DropGuard<F: FnOnce()> {
-    f: ManuallyDrop<F>
+    f: ManuallyDrop<F>,
 }
 
 impl<F: FnOnce()> Drop for DropGuard<F> {
     fn drop(&mut self) {
         // SAFETY: self.f is not used again after self is dropped
-        unsafe {
-            ManuallyDrop::take(&mut self.f)()
-        }
+        unsafe { ManuallyDrop::take(&mut self.f)() }
     }
 }
 
 pub fn drop_guard<F: FnOnce()>(f: F) -> DropGuard<F> {
     DropGuard {
-        f: ManuallyDrop::new(f)
+        f: ManuallyDrop::new(f),
     }
 }
