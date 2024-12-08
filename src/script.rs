@@ -161,12 +161,14 @@ fn prompt_block(lines: &str) -> IResult<&str, ScriptEntry> {
         alt((
             tuple((skip_while(empty, answer), peek(skip_while(empty, prompt))))
                 .map(|(answer, _)| AnswerBlock::Single(answer.into())),
-            many0(tuple((skip_while(empty, answer), skip_while(empty, line))).map(
-                |(answer, line)| Answer {
-                    answer: answer.into(),
-                    response: line.into(),
-                },
-            ))
+            many0(
+                tuple((skip_while(empty, answer), skip_while(empty, line))).map(
+                    |(answer, line)| Answer {
+                        answer: answer.into(),
+                        response: line.into(),
+                    },
+                ),
+            )
             .map(AnswerBlock::Many),
         )),
     )))(lines)?;
@@ -583,7 +585,10 @@ impl ScriptRunner {
         mut commands: Commands,
         mut script_runners: Query<&mut ScriptRunner>,
     ) {
-        if matches!(*trigger.event(), RunnerUpdated::FinishedMain | RunnerUpdated::FinishedEnd) {
+        if matches!(
+            *trigger.event(),
+            RunnerUpdated::FinishedMain | RunnerUpdated::FinishedEnd
+        ) {
             if let Ok(mut runner) = script_runners.get_mut(trigger.entity()) {
                 if runner.showing_text {
                     commands
@@ -642,8 +647,8 @@ impl ScriptChoices {
         scripts: Res<Assets<Script>>,
     ) {
         match trigger.event() {
-            RunnerUpdated::HideText 
-            | RunnerUpdated::HideChoices 
+            RunnerUpdated::HideText
+            | RunnerUpdated::HideChoices
             | RunnerUpdated::FinishedMain
             | RunnerUpdated::FinishedEnd
             | RunnerUpdated::NoScript => {
@@ -720,7 +725,7 @@ impl ScriptChoices {
 
 /// Added to each of the UI elements that holds the text for a given possible response to a script
 /// prompt. These UI elements are spawned as children of the entity with [`ScriptChoices`] and
-/// (currently) not checked for whether they have any other relevant components (although a 
+/// (currently) not checked for whether they have any other relevant components (although a
 /// [`Text`] component is initially inserted).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Component, Reflect)]
 #[require(Text)]
@@ -795,7 +800,9 @@ fn update_script_runner_text(
                 } else if runner.showing_text {
                     // if we failed to get the current entry, either the runner's in an invalid state,
                     // or we hit the end, in both cases text should be hidden
-                    commands.entity(runner_entity).trigger(RunnerUpdated::HideText);
+                    commands
+                        .entity(runner_entity)
+                        .trigger(RunnerUpdated::HideText);
                     runner.showing_text = false;
                 }
                 continue 'runners;

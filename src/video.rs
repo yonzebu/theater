@@ -679,11 +679,9 @@ impl SpecializedRenderPipeline for MipGenerationPipeline {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Event)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Event, Deref, DerefMut)]
 #[non_exhaustive]
-pub enum VideoUpdated {
-    Finished(AssetId<VideoStream>),
-}
+pub struct VideoFinished(pub AssetId<VideoStream>);
 
 #[derive(Default, serde_derive::Serialize, serde_derive::Deserialize)]
 pub struct VideoStreamSettings {
@@ -749,7 +747,7 @@ impl Plugin for VideoPlugin {
         app.init_asset::<VideoStream>()
             .init_asset_loader::<VideoStreamLoader>()
             .add_audio_source::<VideoStream>()
-            .add_event::<VideoUpdated>()
+            .add_event::<VideoFinished>()
             .init_resource::<QueuedFrameMips>()
             .add_systems(PostUpdate, update_videos.in_set(VideoSet::UpdateStreams))
             .configure_sets(
@@ -871,7 +869,7 @@ fn update_videos(
     mut videos: ResMut<Assets<VideoStream>>,
     mut images: ResMut<Assets<Image>>,
     mut queued_frame_mips: ResMut<QueuedFrameMips>,
-    mut video_updates: EventWriter<VideoUpdated>,
+    mut video_finisheds: EventWriter<VideoFinished>,
     time: Res<Time>,
 ) {
     queued_frame_mips.clear();
@@ -989,8 +987,8 @@ fn update_videos(
                 video.buffered_frames.push_back(last);
                 if video.finished_decoding && !video.finished {
                     video.finished = true;
-                    commands.trigger(VideoUpdated::Finished(video_id));
-                    video_updates.send(VideoUpdated::Finished(video_id));
+                    commands.trigger(VideoFinished(video_id));
+                    video_finisheds.send(VideoFinished(video_id));
                 }
             }
         }

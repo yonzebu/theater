@@ -19,9 +19,11 @@ use debug::*;
 use screen_light::{
     ScreenLight, ScreenLightExtension, ScreenLightExtensionPlugin, ScreenLightPlugin,
 };
-use script::{RunnerUpdated, ScriptChoice, ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner};
+use script::{
+    RunnerUpdated, ScriptChoice, ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner,
+};
 use video::{
-    VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream, VideoStreamSettings, VideoUpdated,
+    VideoFinished, VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream, VideoStreamSettings,
 };
 mod screen_light;
 mod script;
@@ -607,19 +609,19 @@ fn setup(
         .entity(text_box_wrapper)
         .add_child(text_visible_box);
     commands.entity(text_visible_box).add_child(script_runner);
-    commands
-        .entity(script_runner)
-        .observe(move |trigger: Trigger<RunnerUpdated>, mut commands: Commands| {
-            match trigger.event() {
-                RunnerUpdated::HideText => {
-                    commands.entity(text_box_wrapper).insert(Visibility::Hidden);
-                } 
-                RunnerUpdated::ShowText => {
-                    commands.entity(text_box_wrapper).insert(Visibility::Inherited);
-                }
-                _ => {}
+    commands.entity(script_runner).observe(
+        move |trigger: Trigger<RunnerUpdated>, mut commands: Commands| match trigger.event() {
+            RunnerUpdated::HideText => {
+                commands.entity(text_box_wrapper).insert(Visibility::Hidden);
             }
-        });
+            RunnerUpdated::ShowText => {
+                commands
+                    .entity(text_box_wrapper)
+                    .insert(Visibility::Inherited);
+            }
+            _ => {}
+        },
+    );
 
     let choice_box_wrapper = commands
         .spawn((Node {
@@ -718,7 +720,7 @@ fn on_start_show(
 }
 
 fn on_enter_animation_finished(
-    trigger: Trigger<AnimationUpdated>, 
+    trigger: Trigger<AnimationUpdated>,
     mut script_runners: Query<&mut ScriptRunner>,
     progress: Res<State<Progress>>,
     mut next_progress: ResMut<NextState<Progress>>,
@@ -731,7 +733,7 @@ fn on_enter_animation_finished(
 }
 
 fn on_video_finished(
-    trigger: Trigger<VideoUpdated>,
+    trigger: Trigger<VideoFinished>,
     mut commands: Commands,
     video_streams: Res<Assets<VideoStream>>,
     mut video_players: Query<(
@@ -744,27 +746,26 @@ fn on_video_finished(
     script_runners: Query<Entity, With<ScriptRunner>>,
     screen_off_image: Res<ScreenOffImage>,
 ) {
-    if let &VideoUpdated::Finished(id) = trigger.event() {
-        info!("video finished!");
-        if video_streams.contains(id) {
-            for entity in script_runners.iter() {
-                commands.trigger_targets(UpdateRunner::ShowEnded, entity);
-            }
+    info!("video finished!");
+    let id = trigger.event().0;
+    if video_streams.contains(id) {
+        for entity in script_runners.iter() {
+            commands.trigger_targets(UpdateRunner::ShowEnded, entity);
+        }
 
-            for (entity, (material, screen_light), player) in video_players.iter_mut() {
-                if player.0.id() != id {
-                    continue;
-                }
-                // TODO: different image replacement?
-                if let Some(handle) = material {
-                    if let Some(material) = materials.get_mut(handle.id()) {
-                        material.base_color_texture = Some(screen_off_image.0.clone());
-                    }
-                } else if let Some(mut screen_light) = screen_light {
-                    screen_light.image = screen_off_image.0.clone();
-                }
-                commands.entity(entity).remove::<VideoPlayer>();
+        for (entity, (material, screen_light), player) in video_players.iter_mut() {
+            if player.0.id() != id {
+                continue;
             }
+            // TODO: different image replacement?
+            if let Some(handle) = material {
+                if let Some(material) = materials.get_mut(handle.id()) {
+                    material.base_color_texture = Some(screen_off_image.0.clone());
+                }
+            } else if let Some(mut screen_light) = screen_light {
+                screen_light.image = screen_off_image.0.clone();
+            }
+            commands.entity(entity).remove::<VideoPlayer>();
         }
     }
 }
@@ -860,10 +861,8 @@ fn check_loaded_state(
     mut next_loaded: ResMut<NextState<Loaded>>,
 ) {
     to_load.retain(|&id| !assets.is_loaded(id));
-    if to_load.len() == 0 {
-        if !**loaded.get() {
-            next_loaded.set(Loaded(true));
-        }
+    if to_load.len() == 0 && !**loaded.get() {
+        next_loaded.set(Loaded(true));
     }
 }
 
