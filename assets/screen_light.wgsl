@@ -241,7 +241,8 @@ fn fetch_screen_light_color(
     let shadow_uv = ndc_pos.xy * vec2(0.5, -0.5) + vec2(0.5);
 
     let shadow = sample_shadow_map(shadow_map, shadow_sampler, shadow_uv, ndc_pos.z, APPROX_TEXEL_SIZE);
-    let color = sample_screen(screen_image, screen_sampler, shadow_uv).xyz;
+    let sampled = sample_screen(screen_image, screen_sampler, shadow_uv);
+    let color = sampled.rgb * clamp(sampled.a, 0., 1.);
     return shadow * color * 0.25;
 }
 

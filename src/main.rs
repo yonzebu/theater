@@ -171,7 +171,7 @@ fn setup(
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        vec![200, 200, 200, 255],
+        vec![200, 200, 200, 0],
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::all(),
     ));
@@ -457,13 +457,7 @@ fn setup(
             you_anim_player,
             AnimationGraphHandle(anim_graphs.add(entering_graph)),
         ))
-        .observe(
-            |trigger: Trigger<AnimationUpdated>, mut script_runners: Query<&mut ScriptRunner>| {
-                for mut runner in script_runners.iter_mut() {
-                    runner.unpause();
-                }
-            },
-        );
+        .observe(on_enter_animation_finished);
 
     // chairs
     let chair: Handle<Scene> = assets.load("chair.glb#Scene0");
@@ -705,6 +699,8 @@ fn on_start_show(
     mut commands: Commands,
     mut video_streams: ResMut<Assets<VideoStream>>,
     future_video_players: Query<(Entity, &FutureVideoPlayer)>,
+    progress: Res<State<Progress>>,
+    mut next_progress: ResMut<NextState<Progress>>,
 ) {
     if *trigger.event() == RunnerUpdated::StartShow {
         for (_, video) in video_streams.iter_mut() {
@@ -716,7 +712,22 @@ fn on_start_show(
                 .insert(VideoPlayer(player.0.clone()))
                 .remove::<FutureVideoPlayer>();
         }
+        debug_assert_eq!(progress.get(), &Progress::Preshow);
+        next_progress.set(Progress::Show);
     }
+}
+
+fn on_enter_animation_finished(
+    trigger: Trigger<AnimationUpdated>, 
+    mut script_runners: Query<&mut ScriptRunner>,
+    progress: Res<State<Progress>>,
+    mut next_progress: ResMut<NextState<Progress>>,
+) {
+    for mut runner in script_runners.iter_mut() {
+        runner.unpause();
+    }
+    debug_assert_eq!(progress.get(), &Progress::Entering);
+    next_progress.set(Progress::Preshow);
 }
 
 fn on_video_finished(

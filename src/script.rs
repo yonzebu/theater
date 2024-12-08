@@ -352,7 +352,8 @@ pub enum RunnerUpdated {
     ShowText,
     HideChoices,
     ShowChoices,
-    Finished,
+    FinishedMain,
+    FinishedEnd,
     NoScript,
     /// Triggered both on the runner and globally whenever a [`ScriptEntry::StartShow`] is reached
     StartShow,
@@ -388,6 +389,8 @@ pub struct ScriptRunner {
     last_displayed_tick: u32,
     finished_line: bool,
     showing_text: bool,
+    /// Whether the current set of entries (main entries or end entries) is finished
+    finished_section: bool,
 }
 
 impl ScriptRunner {
@@ -409,6 +412,7 @@ impl ScriptRunner {
             last_displayed_tick: 0,
             finished_line: false,
             showing_text: false,
+            finished_section: false,
         }
     }
     pub fn pause(&mut self) {
@@ -430,6 +434,7 @@ impl ScriptRunner {
         self.finished_line
     }
     pub fn reset(&mut self) {
+        self.finished_section = false;
         self.show_ended = false;
         self.using_ended_entries = false;
         self.wait_timer = None;
@@ -488,7 +493,14 @@ impl ScriptRunner {
             runner.show_ended = true;
         }
         let Some(entry) = script.get_entry(runner.current_entry, runner.using_ended_entries) else {
-            runner_commands.trigger(RunnerUpdated::Finished);
+            if !runner.finished_section {
+                if runner.using_ended_entries {
+                    runner_commands.trigger(RunnerUpdated::FinishedEnd);
+                } else {
+                    runner_commands.trigger(RunnerUpdated::FinishedMain);
+                }
+                runner.finished_section = true;
+            }
             return;
         };
         match trigger.event() {
@@ -538,7 +550,6 @@ impl ScriptRunner {
                         runner.current_answer = None;
                         text.0.clear();
                         runner.reset_display();
-                        runner_commands.trigger(RunnerUpdated::Finished);
                     } else {
                         runner.current_answer = None;
                         text.0.clear();
@@ -601,7 +612,7 @@ impl ScriptRunner {
         mut commands: Commands,
         mut script_runners: Query<&mut ScriptRunner>,
     ) {
-        if *trigger.event() == RunnerUpdated::Finished {
+        if matches!(*trigger.event(), RunnerUpdated::FinishedMain | RunnerUpdated::FinishedEnd) {
             if let Ok(mut runner) = script_runners.get_mut(trigger.entity()) {
                 if runner.showing_text {
                     commands
@@ -662,7 +673,8 @@ impl ScriptChoices {
         match trigger.event() {
             RunnerUpdated::HideText 
             | RunnerUpdated::HideChoices 
-            | RunnerUpdated::Finished 
+            | RunnerUpdated::FinishedMain
+            | RunnerUpdated::FinishedEnd
             | RunnerUpdated::NoScript => {
                 if let Some(mut choices_commands) = commands.get_entity(trigger.entity()) {
                     if let Ok((mut choices_display, children)) =
