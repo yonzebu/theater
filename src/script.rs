@@ -1,4 +1,4 @@
-use std::{borrow::Cow, error::Error, fmt::Display, ops::Deref, time::Duration};
+use std::{borrow::Cow, cell::Cell, error::Error, fmt::Display, ops::Deref, time::Duration};
 
 use bevy::{
     asset::{io::Reader, AssetLoader},
@@ -16,6 +16,8 @@ use nom::{
     sequence::{delimited, preceded, terminated, tuple},
     IResult, InputLength, Parser,
 };
+
+use crate::drop_guard;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Answer {
@@ -338,6 +340,13 @@ pub enum RunnerUpdated {
     FinishedMain,
     FinishedEnd,
     FinishedLine,
+    /// Emitted whenever [`UpdateRunner`] is triggered on a [`ScriptRunner`]. `ignored` indicates
+    /// whether or not the event was ignored by the script runner, for any reason.
+    // honestly this behavior is kinda fragile and maybe not the best thing to rely on often
+    Received {
+        update: UpdateRunner,
+        ignored: bool,
+    },
     NoScript,
     /// Triggered both on the runner and globally whenever a [`ScriptEntry::StartShow`] is reached
     StartShow,
@@ -464,6 +473,8 @@ impl ScriptRunner {
     fn on_update_runner_trigger(
         trigger: Trigger<UpdateRunner>,
         mut commands: Commands,
+        // need a separate commands to get exclusive access for the drop guard
+        mut received_commands: Commands,
         mut runners: Query<(&mut ScriptRunner, &mut Text)>,
         scripts: Res<Assets<Script>>,
     ) {
@@ -472,9 +483,23 @@ impl ScriptRunner {
             return;
         };
         let runner = &mut *runner;
+        // the drop guard makes sure that there is always a response to an update,
+        // assuming the entity was a ScriptRunner (with Text) to begin with
+        // any further logic sets ignored to false if it processes the received update
+        let ignored = Cell::new(true);
+        let drop_guard = drop_guard(|| {
+            received_commands.trigger_targets(
+                RunnerUpdated::Received {
+                    update: trigger.event().clone(),
+                    ignored: ignored.get()
+                },
+                trigger.entity()
+            );
+        });
         let mut runner_commands = commands.entity(runner_entity);
         let Some(script) = scripts.get(runner.script.id()) else {
-            runner_commands.trigger(RunnerUpdated::NoScript);
+            runner_commands
+                .trigger(RunnerUpdated::NoScript);
             return;
         };
         // this is handled early so that the runner will ALWAYS be told if the show ends, assuming
@@ -482,6 +507,7 @@ impl ScriptRunner {
         // won't be told the show has ended
         if *trigger.event() == UpdateRunner::ShowEnded {
             runner.show_ended = true;
+            ignored.set(false);
         }
         let Some(entry) = runner.current_entry(script) else {
             return;
@@ -500,6 +526,7 @@ impl ScriptRunner {
                             [runner_entity, runner.choices_display],
                         );
                     }
+                    ignored.set(false);
                 }
                 (ScriptEntry::Prompt { choices, .. }, Some(index)) => {
                     let Some(response) = choices.get_response(index) else {
@@ -510,6 +537,7 @@ impl ScriptRunner {
                         runner.finish_line(&text);
                         commands.trigger_targets(RunnerUpdated::FinishedLine, runner_entity);
                     }
+                    ignored.set(false);
                 }
                 (ScriptEntry::Wait(_), _)
                 | (ScriptEntry::StartShow, _)
@@ -524,6 +552,7 @@ impl ScriptRunner {
                     text.0.clear();
                     runner.reset_display();
                     runner.next_entry();
+                    ignored.set(false);
                 }
                 (ScriptEntry::Prompt { .. }, None) => {}
                 (
@@ -537,6 +566,7 @@ impl ScriptRunner {
                     text.0.clear();
                     runner.reset_display();
                     runner.next_entry();
+                    ignored.set(false);
                 }
                 (ScriptEntry::Line(_), Some(_))
                 | (
@@ -569,6 +599,7 @@ impl ScriptRunner {
                         );
                         runner.next_entry();
                     }
+                    ignored.set(false);
                 }
                 (
                     ScriptEntry::Prompt {
@@ -587,6 +618,7 @@ impl ScriptRunner {
                         RunnerUpdated::HideChoices,
                         [runner_entity, runner.choices_display],
                     );
+                    ignored.set(false);
                 }
             },
             // handled above
@@ -731,7 +763,9 @@ impl ScriptChoices {
                     | ScriptEntry::OnShowEnd => {}
                 }
             }
-            RunnerUpdated::StartShow | RunnerUpdated::FinishedLine => {}
+            RunnerUpdated::StartShow 
+            | RunnerUpdated::FinishedLine 
+            | RunnerUpdated::Received { .. } => {}
         }
     }
 }

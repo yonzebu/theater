@@ -817,7 +817,8 @@ fn setup(
     commands.entity(text_visible_box).add_child(script_runner);
     commands
         .entity(script_runner)
-        .observe(on_runner_updated_update_ui);
+        .observe(on_runner_updated_update_ui)
+        .observe(hide_instructions_when_next_line_not_ignored);
 
     let choice_box_wrapper = commands
         .spawn((Node {
@@ -939,12 +940,22 @@ fn on_start_text_fade_out_finished(
     next_progress.set(Progress::FadeIn);
 }
 
+fn hide_instructions_when_next_line_not_ignored(
+    trigger: Trigger<RunnerUpdated>,
+    mut instructions: Query<&mut Visibility, With<Instructions>>,
+) {
+    if let RunnerUpdated::Received { update: UpdateRunner::NextLine, ignored: false } = trigger.event() {
+        for mut visibility in instructions.iter_mut() {
+            *visibility = Visibility::Hidden;
+        }
+    }
+}
+
 fn on_text_visible_box_clicked(
     trigger: Trigger<Pointer<Click>>,
     mut commands: Commands,
     with_children: Query<&Children>,
     runners: Query<(Entity, &ScriptRunner)>,
-    instructions: Query<Entity, With<Instructions>>,
 ) {
     if let Some((runner_entity, runner)) = with_children
         .get(trigger.entity())
@@ -953,9 +964,6 @@ fn on_text_visible_box_clicked(
     {
         if runner.is_line_finished() {
             commands.trigger_targets(UpdateRunner::NextLine, runner_entity);
-            for entity in instructions.iter() {
-                commands.entity(entity).insert(Visibility::Hidden);
-            }
         } else {
             commands.trigger_targets(UpdateRunner::FinishLine, runner_entity);
         }
@@ -993,6 +1001,7 @@ fn on_runner_updated_update_ui(
             instructions_text.0.push_str("click an option to respond");
         }
         RunnerUpdated::HideChoices => {
+            commands.entity(instructions).insert(Visibility::Hidden);
             instructions_text.0.clear();
             instructions_text.0.push_str("click to continue");
         }
