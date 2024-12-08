@@ -4,6 +4,7 @@ use core::fmt::Debug;
 use bevy::animation::{animated_field, AnimationTarget, AnimationTargetId, RepeatAnimation};
 use bevy::asset::{RenderAssetUsages, UntypedAssetId};
 use bevy::audio::PlaybackMode;
+use bevy::color::ColorCurve;
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::world::DeferredWorld;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, NotShadowCaster};
@@ -203,7 +204,6 @@ fn setup(
     commands.spawn((
         Mesh3d(rectangle.clone()),
         MeshMaterial3d(materials.add(StandardMaterial {
-            unlit: true,
             base_color_texture: Some(screen_off_image.clone()),
             ..default()
         })),
@@ -692,6 +692,10 @@ fn setup(
                 ..default()
             },
             Text("loading...".into()),
+            TextLayout {
+                justify: JustifyText::Center,
+                ..default()
+            },
             TextFont {
                 font_size: 50.,
                 ..default()
@@ -870,6 +874,8 @@ fn on_start_show(
     trigger: Trigger<RunnerUpdated>,
     mut commands: Commands,
     mut video_streams: ResMut<Assets<VideoStream>>,
+    with_materials: Query<&MeshMaterial3d<StandardMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     future_video_players: Query<(Entity, &FutureVideoPlayer)>,
     progress: Res<State<Progress>>,
     mut next_progress: ResMut<NextState<Progress>>,
@@ -883,6 +889,11 @@ fn on_start_show(
                 .entity(entity)
                 .insert(VideoPlayer(player.0.clone()))
                 .remove::<FutureVideoPlayer>();
+            if let Ok(MeshMaterial3d(material_handle)) = with_materials.get(entity) {
+                if let Some(material) = materials.get_mut(material_handle.id()) {
+                    material.unlit = true;
+                }
+            }
         }
         debug_assert_eq!(progress.get(), &Progress::Preshow);
         next_progress.set(Progress::Show);
@@ -925,6 +936,8 @@ fn on_video_finished(
     mut images: ResMut<Assets<Image>>,
     script_runners: Query<Entity, With<ScriptRunner>>,
     screen_off_image: Res<ScreenOffImage>,
+    progress: Res<State<Progress>>,
+    mut next_progress: ResMut<NextState<Progress>>,
 ) {
     info!("video finished!");
     let id = trigger.event().0;
@@ -941,12 +954,15 @@ fn on_video_finished(
             if let Some(handle) = material {
                 if let Some(material) = materials.get_mut(handle.id()) {
                     material.base_color_texture = Some(screen_off_image.0.clone());
+                    material.unlit = false;
                 }
             } else if let Some(mut screen_light) = screen_light {
                 screen_light.image = screen_off_image.0.clone();
             }
             commands.entity(entity).remove::<VideoPlayer>();
         }
+        debug_assert!(progress.get() == &Progress::Show || progress.get() == &Progress::Postshow);
+        next_progress.set(Progress::Postshow);
     }
 }
 
@@ -1063,10 +1079,114 @@ fn switch_to_theater_ui(
     // i am too lazy to do the Option<&mut Visibility> dance
     commands
         .entity(start_ui_root.single())
-        .insert(Visibility::Hidden);
+        .despawn_recursive();
     commands
         .entity(theater_root.single())
         .insert(Visibility::Inherited);
+}
+
+fn fade_to_black(
+    mut commands: Commands,
+    ui_root: Query<Entity, With<UiRoot>>,
+    start_ui_root: Query<Entity, With<StartUiRoot>>,
+    theater_root: Query<Entity, With<TheaterUiRoot>>,
+    mut animations: ResMut<Assets<AnimationClip>>,
+    mut anim_graphs: ResMut<Assets<AnimationGraph>>
+) {
+    let end_ui = commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            align_self: AlignSelf::Stretch,
+            justify_self: JustifySelf::Stretch,
+            justify_content: JustifyContent::Center,
+            justify_items: JustifyItems::Center,
+            align_content: AlignContent::Center,
+            align_items: AlignItems::Center,
+            width: Val::Vw(100.),
+            height: Val::Vh(100.),
+            ..default()
+        },
+        BackgroundColor(Color::linear_rgba(0., 0., 0., 0.)),
+    )).id();
+    let end_ui_target = AnimationTargetId::from_name(&Name::new("end_ui"));
+    let mut fade_clip = AnimationClip::default();
+    fade_clip.add_curve_to_target(
+        end_ui_target, 
+        AnimatableCurve::new(
+            ColorAlpha::new(|bg: &mut BackgroundColor| &mut bg.0),
+            EasingCurve::new(
+                0.,
+                1.,
+                EaseFunction::Linear
+            ).reparametrize_linear(Interval::new(0., 4.).unwrap()).unwrap()
+        )
+    );
+    fade_clip.add_event(4., AnimationFinished);
+    let (fade_graph, fade_index) = AnimationGraph::from_clip(animations.add(fade_clip));
+    let mut end_ui_anim_player = AnimationPlayer::default();
+    end_ui_anim_player
+        .play(fade_index)
+        .set_repeat(RepeatAnimation::Never);
+    commands.entity(end_ui).insert((
+        AnimationTarget {
+            id: end_ui_target,
+            player: end_ui,
+        },
+        end_ui_anim_player,
+        AnimationGraphHandle(anim_graphs.add(fade_graph)),
+    ))
+    .set_parent(ui_root.single())
+    .observe(|trigger: Trigger<AnimationFinished>, mut commands: Commands, 
+        mut animations: ResMut<Assets<AnimationClip>>,
+        mut anim_graphs: ResMut<Assets<AnimationGraph>>| {
+        let end_text = commands.spawn((
+            Node {
+                align_self: AlignSelf::Center,
+                justify_self: JustifySelf::Center,
+                align_content: AlignContent::Center,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                justify_items: JustifyItems::Center,
+                ..default()
+            },
+            Text("the end\n(you can close the window whenever you want)".into()),
+            TextLayout {
+                justify: JustifyText::Center,
+                ..default()
+            },
+            TextFont {
+                font_size: 50.,
+                ..default()
+            },
+            TextColor(Color::linear_rgba(1., 1., 1., 0.)),
+        )).id();
+        let end_text_target = AnimationTargetId::from_name(&Name::new("end_text"));
+        let mut fade_clip = AnimationClip::default();
+        fade_clip.add_curve_to_target(
+            end_text_target, 
+            AnimatableCurve::new(
+                ColorAlpha::new(|text_color: &mut TextColor| &mut text_color.0),
+                EasingCurve::new(
+                    0.,
+                    1.,
+                    EaseFunction::Linear
+                ).reparametrize_linear(Interval::new(0., 2.).unwrap()).unwrap()
+            )
+        );
+        let (fade_graph, fade_index) = AnimationGraph::from_clip(animations.add(fade_clip));
+        let mut end_text_anim_player = AnimationPlayer::default();
+        end_text_anim_player.play(fade_index).set_repeat(RepeatAnimation::Never);
+        commands.entity(end_text).insert((
+            AnimationTarget {
+                id: end_text_target,
+                player: end_text,
+            },
+            end_text_anim_player,
+            AnimationGraphHandle(anim_graphs.add(fade_graph)),
+        ));
+        commands.entity(trigger.entity()).add_child(end_text);
+    });
+    commands.entity(theater_root.single()).despawn_recursive();
 }
 
 fn update(mut runners: Query<&mut ScriptRunner>, keyboard: Res<ButtonInput<KeyCode>>) {
@@ -1134,6 +1254,10 @@ fn main() {
             (|mut mes: Query<&mut AnimationPlayer, With<Me>>| {
                 mes.single_mut().resume_all();
             },),
+        )
+        .add_systems(
+            OnEnter(Progress::End),
+            fade_to_black,
         )
         .add_systems(Last, (debug_events::<RunnerUpdated>(),))
         .run();
