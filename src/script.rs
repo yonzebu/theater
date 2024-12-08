@@ -467,11 +467,12 @@ impl ScriptRunner {
         mut runners: Query<(&mut ScriptRunner, &mut Text)>,
         scripts: Res<Assets<Script>>,
     ) {
-        let Ok((mut runner, mut text)) = runners.get_mut(trigger.entity()) else {
+        let runner_entity = trigger.entity();
+        let Ok((mut runner, mut text)) = runners.get_mut(runner_entity) else {
             return;
         };
         let runner = &mut *runner;
-        let mut runner_commands = commands.entity(trigger.entity());
+        let mut runner_commands = commands.entity(runner_entity);
         let Some(script) = scripts.get(runner.script.id()) else {
             runner_commands.trigger(RunnerUpdated::NoScript);
             return;
@@ -491,11 +492,13 @@ impl ScriptRunner {
                     text.0.clone_from(s);
                     if !runner.is_line_finished() {
                         runner.finish_line(&text);
-                        commands.trigger_targets(RunnerUpdated::FinishedLine, trigger.entity());
+                        commands.trigger_targets(RunnerUpdated::FinishedLine, runner_entity);
                     }
                     if matches!(entry, ScriptEntry::Prompt { .. }) {
-                        commands
-                            .trigger_targets(RunnerUpdated::ShowChoices, [trigger.entity(), runner.choices_display]);
+                        commands.trigger_targets(
+                            RunnerUpdated::ShowChoices,
+                            [runner_entity, runner.choices_display],
+                        );
                     }
                 }
                 (ScriptEntry::Prompt { choices, .. }, Some(index)) => {
@@ -505,7 +508,7 @@ impl ScriptRunner {
                     text.0.clone_from(response);
                     if !runner.is_line_finished() {
                         runner.finish_line(&text);
-                        commands.trigger_targets(RunnerUpdated::FinishedLine, trigger.entity());
+                        commands.trigger_targets(RunnerUpdated::FinishedLine, runner_entity);
                     }
                 }
                 (ScriptEntry::Wait(_), _)
@@ -560,8 +563,10 @@ impl ScriptRunner {
                     if index == 0 {
                         text.0.clear();
                         runner.reset_display();
-                        commands
-                            .trigger_targets(RunnerUpdated::HideChoices, runner.choices_display);
+                        commands.trigger_targets(
+                            RunnerUpdated::HideChoices,
+                            [runner_entity, runner.choices_display],
+                        );
                         runner.next_entry();
                     }
                 }
@@ -578,7 +583,10 @@ impl ScriptRunner {
                     runner.current_answer = Some(index);
                     text.0.clear();
                     runner.reset_display();
-                    commands.trigger_targets(RunnerUpdated::HideChoices, runner.choices_display);
+                    commands.trigger_targets(
+                        RunnerUpdated::HideChoices,
+                        [runner_entity, runner.choices_display],
+                    );
                 }
             },
             // handled above
@@ -590,14 +598,15 @@ impl ScriptRunner {
         mut commands: Commands,
         mut script_runners: Query<&mut ScriptRunner>,
     ) {
+        let runner_entity = trigger.entity();
         if matches!(
             *trigger.event(),
             RunnerUpdated::FinishedMain | RunnerUpdated::FinishedEnd
         ) {
-            if let Ok(mut runner) = script_runners.get_mut(trigger.entity()) {
+            if let Ok(mut runner) = script_runners.get_mut(runner_entity) {
                 if runner.showing_text {
                     commands
-                        .entity(trigger.entity())
+                        .entity(runner_entity)
                         .trigger(RunnerUpdated::HideText);
                     runner.showing_text = false;
                 }
@@ -651,15 +660,16 @@ impl ScriptChoices {
         choices: Query<&ScriptChoice>,
         scripts: Res<Assets<Script>>,
     ) {
+        let choices_entity = trigger.entity();
         match trigger.event() {
             RunnerUpdated::HideText
             | RunnerUpdated::HideChoices
             | RunnerUpdated::FinishedMain
             | RunnerUpdated::FinishedEnd
             | RunnerUpdated::NoScript => {
-                if let Some(mut choices_commands) = commands.get_entity(trigger.entity()) {
+                if let Some(mut choices_commands) = commands.get_entity(choices_entity) {
                     if let Ok((mut choices_display, children)) =
-                        choices_displays.get_mut(trigger.entity())
+                        choices_displays.get_mut(choices_entity)
                     {
                         if !choices_display.displaying_choices {
                             return;
@@ -684,8 +694,8 @@ impl ScriptChoices {
             }
             RunnerUpdated::ShowChoices | RunnerUpdated::ShowText => {
                 let (Some(mut choices_commands), Ok((mut choices_display, _))) = (
-                    commands.get_entity(trigger.entity()),
-                    choices_displays.get_mut(trigger.entity()),
+                    commands.get_entity(choices_entity),
+                    choices_displays.get_mut(choices_entity),
                 ) else {
                     return;
                 };
@@ -921,7 +931,10 @@ fn update_script_runner_text(
                     commands.trigger_targets(RunnerUpdated::FinishedLine, runner_entity);
                 }
                 if currently_prompt {
-                    commands.trigger_targets(RunnerUpdated::ShowChoices, [runner_entity, runner.choices_display]);
+                    commands.trigger_targets(
+                        RunnerUpdated::ShowChoices,
+                        [runner_entity, runner.choices_display],
+                    );
                 }
             }
             break;
@@ -932,18 +945,21 @@ fn update_script_runner_text(
 fn on_script_reload_reset_runners(
     trigger: Trigger<AssetEvent<Script>>,
     mut commands: Commands,
-    mut runners: Query<(&mut ScriptRunner, &mut Text)>,
+    mut runners: Query<(Entity, &mut ScriptRunner, &mut Text)>,
 ) {
     match trigger.event() {
         AssetEvent::Added { id }
         | AssetEvent::Modified { id }
         | AssetEvent::LoadedWithDependencies { id } => {
-            for (mut runner, mut text) in runners.iter_mut() {
+            for (runner_entity, mut runner, mut text) in runners.iter_mut() {
                 if runner.script.id() == *id {
                     runner.reset();
                     runner.unpause();
                     text.0.clear();
-                    commands.trigger_targets(RunnerUpdated::HideChoices, runner.choices_display);
+                    commands.trigger_targets(
+                        RunnerUpdated::HideChoices,
+                        [runner_entity, runner.choices_display],
+                    );
                 }
             }
         }

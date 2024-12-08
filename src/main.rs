@@ -21,7 +21,7 @@ use screen_light::{
     ScreenLight, ScreenLightExtension, ScreenLightExtensionPlugin, ScreenLightPlugin,
 };
 use script::{
-    RunnerUpdated, Script, ScriptChoice, ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner
+    RunnerUpdated, Script, ScriptChoice, ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner,
 };
 use video::{
     VideoFinished, VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream, VideoStreamSettings,
@@ -39,6 +39,12 @@ struct AnimationFinished;
 enum Progress {
     #[default]
     Start,
+    // these two states are disgusting, there's probably something nicer to be made by using the animation graph system or something
+    // on the other hand, that's orthogonal to states, so maybe not?
+    // the tldr of why they're needed is that there are several time blocks during
+    // which loading could finish and different behaviors that are desired for each time block
+    FadeOutStartText,
+    FadeIn,
     Entering,
     Preshow,
     Show,
@@ -78,6 +84,11 @@ struct UiRoot;
 #[component(storage = "SparseSet")]
 struct TheaterUiRoot;
 
+/// The thing that controls the size of the text box by being a bounding rectangle
+#[derive(Component)]
+#[component(storage = "SparseSet")]
+struct TextBoxWrapper;
+
 #[derive(Component)]
 struct Instructions;
 
@@ -87,7 +98,11 @@ struct StartUiRoot;
 
 #[derive(Component)]
 #[component(storage = "SparseSet")]
-struct StartButton;
+struct StartText;
+
+#[derive(Component)]
+#[component(storage = "SparseSet")]
+struct LoadingText;
 
 #[derive(Component)]
 #[component(storage = "SparseSet")]
@@ -97,10 +112,8 @@ struct You;
 #[component(storage = "SparseSet")]
 struct Me;
 
-enum UpdateInstructions {
-    Show,
-    Hide,
-}
+#[derive(Component)]
+struct FadeOutIndex(AnimationNodeIndex);
 
 const CHAIR_ROWS: i32 = 5;
 const CHAIR_COLS: i32 = 5;
@@ -677,6 +690,7 @@ fn setup(
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
+                flex_direction: FlexDirection::Column,
                 align_self: AlignSelf::Stretch,
                 justify_self: JustifySelf::Stretch,
                 justify_content: JustifyContent::Center,
@@ -699,17 +713,16 @@ fn setup(
                 justify_self: JustifySelf::Center,
                 ..default()
             },
-            Text("loading...".into()),
+            Text("this game is controlled with the mouse\n\n(click anywhere to continue)".into()),
             TextLayout {
                 justify: JustifyText::Center,
                 ..default()
             },
             TextFont {
-                font_size: 50.,
+                font_size: 30.,
                 ..default()
             },
-            Button,
-            StartButton,
+            StartText,
         ))
         .id();
     commands.entity(start_screen).observe(on_start_clicked);
@@ -749,23 +762,26 @@ fn setup(
                 ..default()
             },
             Visibility::Hidden,
+            TextBoxWrapper,
         ))
         .id();
-    let instructions_text = commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            align_self: AlignSelf::Center,
-            justify_self: JustifySelf::End,
-            bottom: Val::Percent(10.),
-            ..default()
-        },
-        Text("click to continue".into()),
-        TextFont {
-            font_size: 15.,
-            ..default()
-        },
-        Instructions
-    )).id();
+    let instructions_text = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                align_self: AlignSelf::Center,
+                justify_self: JustifySelf::End,
+                bottom: Val::Percent(10.),
+                ..default()
+            },
+            Text("click to continue".into()),
+            TextFont {
+                font_size: 15.,
+                ..default()
+            },
+            Instructions,
+        ))
+        .id();
     let text_visible_box = commands
         .spawn((
             Node {
@@ -799,42 +815,9 @@ fn setup(
         .add_child(text_visible_box)
         .add_child(instructions_text);
     commands.entity(text_visible_box).add_child(script_runner);
-    commands.entity(script_runner).observe(
-        move |trigger: Trigger<RunnerUpdated>,
-              mut commands: Commands,
-              scripts: Res<Assets<Script>>,
-              runners: Query<&ScriptRunner>,
-              progress: Res<State<Progress>>,
-              mut next_progress: ResMut<NextState<Progress>>| match trigger.event() {
-            RunnerUpdated::HideText => {
-                commands.entity(text_box_wrapper).insert(Visibility::Hidden);
-                commands.entity(instructions_text).insert(Visibility::Hidden);
-            }
-            RunnerUpdated::ShowText => {
-                commands
-                    .entity(text_box_wrapper)
-                    .insert(Visibility::Inherited);
-            }
-            RunnerUpdated::FinishedLine => {
-                commands.entity(instructions_text).insert(Visibility::Inherited);
-            }
-            RunnerUpdated::ShowChoices => {
-                // this not conflicting with the FinishedLine thing depends on consistent
-                // ordering between those (FinishedLine is always triggered first)
-                // that's kinda kludgy and i don't like it
-                commands.entity(instructions_text).insert(Visibility::Hidden);
-            }
-            RunnerUpdated::FinishedMain => {
-                debug_assert_eq!(progress.get(), &Progress::Show);
-                next_progress.set(Progress::Postshow);
-            }
-            RunnerUpdated::FinishedEnd => {
-                debug_assert_eq!(progress.get(), &Progress::Postshow);
-                next_progress.set(Progress::Leaving);
-            }
-            _ => {}
-        },
-    );
+    commands
+        .entity(script_runner)
+        .observe(on_runner_updated_update_ui);
 
     let choice_box_wrapper = commands
         .spawn((Node {
@@ -877,15 +860,83 @@ fn setup(
 fn on_start_clicked(
     trigger: Trigger<Pointer<Click>>,
     mut commands: Commands,
+    start_text: Query<Entity, With<StartText>>,
+    mut animations: ResMut<Assets<AnimationClip>>,
+    mut anim_graphs: ResMut<Assets<AnimationGraph>>,
+    progress: Res<State<Progress>>,
+    mut next_progress: ResMut<NextState<Progress>>,
+    mut was_clicked: Local<bool>,
+) {
+    if *was_clicked {
+        return;
+    }
+    *was_clicked = true;
+    let Ok(start_text) = start_text.get_single() else { return; };
+    let (target, player, graph) = alpha_fade_animation(
+        1.,
+        0.,
+        1.,
+        |text_color: &mut TextColor| &mut text_color.0,
+        "start_text",
+        &mut animations,
+        |clip| clip.add_event(2., AnimationFinished),
+    );
+    commands
+        .entity(start_text)
+        .insert((
+            AnimationTarget {
+                id: target,
+                player: start_text,
+            },
+            player,
+            AnimationGraphHandle(anim_graphs.add(graph)),
+        ))
+        .observe(on_start_text_fade_out_finished);
+    next_progress.set(Progress::FadeOutStartText);
+}
+
+// spawns the loading text if not loaded, otherwise starts fading in to the theater
+fn on_start_text_fade_out_finished(
+    trigger: Trigger<AnimationFinished>,
+    mut commands: Commands,
+    mut start_ui_root: Single<(Entity, &mut Node), With<StartUiRoot>>,
+    mut start_text: Query<&mut Text>,
+    mut animations: ResMut<Assets<AnimationClip>>,
+    mut anim_graphs: ResMut<Assets<AnimationGraph>>,
     loaded: Res<State<Loaded>>,
     progress: Res<State<Progress>>,
     mut next_progress: ResMut<NextState<Progress>>,
 ) {
+    let (start_ui_root, mut start_ui_node) = start_ui_root.into_inner();
+    start_ui_node.justify_content = JustifyContent::End;
+    start_ui_node.align_items = AlignItems::End;
+    commands.entity(trigger.entity()).despawn_recursive();
+    debug_assert_eq!(progress.get(), &Progress::FadeOutStartText);
+    
     if !**loaded.get() {
-        return;
+        let loading_text = commands
+            .spawn((
+                Node {
+                    align_self: AlignSelf::End,
+                    justify_self: JustifySelf::End,
+                    ..default()
+                },
+                Text("loading...".into()),
+                TextLayout {
+                    justify: JustifyText::Right,
+                    ..default()
+                },
+                TextColor(Color::linear_rgb(1., 1., 1.)),
+                TextFont {
+                    font_size: 20.,
+                    ..default()
+                },
+                LoadingText,
+            ))
+            .set_parent(start_ui_root)
+            .id();
     }
-    debug_assert_eq!(progress.get(), &Progress::Start);
-    next_progress.set(Progress::Entering);
+    next_progress.set(Progress::FadeIn);
 }
 
 fn on_text_visible_box_clicked(
@@ -908,6 +959,52 @@ fn on_text_visible_box_clicked(
         } else {
             commands.trigger_targets(UpdateRunner::FinishLine, runner_entity);
         }
+    }
+}
+
+fn on_runner_updated_update_ui(
+    trigger: Trigger<RunnerUpdated>,
+    mut commands: Commands,
+    scripts: Res<Assets<Script>>,
+    runners: Query<&ScriptRunner>,
+    progress: Res<State<Progress>>,
+    text_box_wrapper: Single<Entity, With<TextBoxWrapper>>,
+    mut instructions_text: Single<(Entity, &mut Text), With<Instructions>>,
+    mut next_progress: ResMut<NextState<Progress>>,
+) {
+    let (instructions, mut instructions_text) = instructions_text.into_inner();
+    match trigger.event() {
+        RunnerUpdated::HideText => {
+            commands
+                .entity(text_box_wrapper.into_inner())
+                .insert(Visibility::Hidden);
+            commands.entity(instructions).insert(Visibility::Hidden);
+        }
+        RunnerUpdated::ShowText => {
+            commands
+                .entity(text_box_wrapper.into_inner())
+                .insert(Visibility::Inherited);
+        }
+        RunnerUpdated::FinishedLine => {
+            commands.entity(instructions).insert(Visibility::Inherited);
+        }
+        RunnerUpdated::ShowChoices => {
+            instructions_text.0.clear();
+            instructions_text.0.push_str("click an option to respond");
+        }
+        RunnerUpdated::HideChoices => {
+            instructions_text.0.clear();
+            instructions_text.0.push_str("click to continue");
+        }
+        RunnerUpdated::FinishedMain => {
+            debug_assert_eq!(progress.get(), &Progress::Show);
+            next_progress.set(Progress::Postshow);
+        }
+        RunnerUpdated::FinishedEnd => {
+            debug_assert_eq!(progress.get(), &Progress::Postshow);
+            next_progress.set(Progress::Leaving);
+        }
+        _ => {}
     }
 }
 
@@ -1096,9 +1193,10 @@ fn check_loaded_state(
     mut to_load: ResMut<AssetsToLoad>,
     loaded: Res<State<Loaded>>,
     mut next_loaded: ResMut<NextState<Loaded>>,
+    keyboard: Res<ButtonInput<KeyCode>>
 ) {
-    to_load.retain(|&id| !assets.is_loaded(id));
-    if to_load.len() == 0 && !**loaded.get() {
+    to_load.retain(|&id| assets.is_managed(id) && !assets.is_loaded(id));
+    if to_load.is_empty() && !**loaded.get() {
         next_loaded.set(Loaded(true));
     }
 }
@@ -1114,120 +1212,151 @@ fn remove_waiting_for_loads(
 
 fn switch_to_theater_ui(
     mut commands: Commands,
-    start_ui_root: Query<Entity, With<StartUiRoot>>,
-    theater_root: Query<Entity, With<TheaterUiRoot>>,
+    start_ui_root: Single<Entity, With<StartUiRoot>>,
+    theater_root: Single<Entity, With<TheaterUiRoot>>,
 ) {
     // i am too lazy to do the Option<&mut Visibility> dance
     commands
-        .entity(start_ui_root.single())
+        .entity(start_ui_root.into_inner())
         .despawn_recursive();
     commands
-        .entity(theater_root.single())
+        .entity(theater_root.into_inner())
         .insert(Visibility::Inherited);
+}
+
+fn fade_in_to_theater(
+    mut commands: Commands,
+    start_ui_root: Single<Entity, With<StartUiRoot>>,
+    mut animations: ResMut<Assets<AnimationClip>>,
+    mut anim_graphs: ResMut<Assets<AnimationGraph>>,
+) {
+    let (target, player, graph) = alpha_fade_animation(
+        1.,
+        0.,
+        4.,
+        |color: &mut BackgroundColor| &mut color.0,
+        "start_ui_root",
+        &mut animations,
+        |clip| clip.add_event(4., AnimationFinished),
+    );
+    let start_ui_root = start_ui_root.into_inner();
+    commands
+        .entity(start_ui_root)
+        .insert((
+            AnimationTarget {
+                id: target,
+                player: start_ui_root,
+            },
+            player,
+            AnimationGraphHandle(anim_graphs.add(graph)),
+        ))
+        .observe(finish_fade_in_to_theater);
+}
+
+fn finish_fade_in_to_theater(
+    trigger: Trigger<AnimationFinished>,
+    progress: Res<State<Progress>>,
+    mut next_progress: ResMut<NextState<Progress>>,
+) {
+    debug_assert_eq!(progress.get(), &Progress::FadeIn);
+    next_progress.set(Progress::Entering);
 }
 
 fn fade_to_black(
     mut commands: Commands,
-    ui_root: Query<Entity, With<UiRoot>>,
-    start_ui_root: Query<Entity, With<StartUiRoot>>,
-    theater_root: Query<Entity, With<TheaterUiRoot>>,
+    ui_root: Single<Entity, With<UiRoot>>,
+    theater_root: Single<Entity, With<TheaterUiRoot>>,
     mut animations: ResMut<Assets<AnimationClip>>,
-    mut anim_graphs: ResMut<Assets<AnimationGraph>>
+    mut anim_graphs: ResMut<Assets<AnimationGraph>>,
 ) {
-    let end_ui = commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            align_self: AlignSelf::Stretch,
-            justify_self: JustifySelf::Stretch,
-            justify_content: JustifyContent::Center,
-            justify_items: JustifyItems::Center,
-            align_content: AlignContent::Center,
-            align_items: AlignItems::Center,
-            width: Val::Vw(100.),
-            height: Val::Vh(100.),
-            ..default()
-        },
-        BackgroundColor(Color::linear_rgba(0., 0., 0., 0.)),
-    )).id();
-    let end_ui_target = AnimationTargetId::from_name(&Name::new("end_ui"));
-    let mut fade_clip = AnimationClip::default();
-    fade_clip.add_curve_to_target(
-        end_ui_target, 
-        AnimatableCurve::new(
-            ColorAlpha::new(|bg: &mut BackgroundColor| &mut bg.0),
-            EasingCurve::new(
-                0.,
-                1.,
-                EaseFunction::Linear
-            ).reparametrize_linear(Interval::new(0., 4.).unwrap()).unwrap()
-        )
-    );
-    fade_clip.add_event(4., AnimationFinished);
-    let (fade_graph, fade_index) = AnimationGraph::from_clip(animations.add(fade_clip));
-    let mut end_ui_anim_player = AnimationPlayer::default();
-    end_ui_anim_player
-        .play(fade_index)
-        .set_repeat(RepeatAnimation::Never);
-    commands.entity(end_ui).insert((
-        AnimationTarget {
-            id: end_ui_target,
-            player: end_ui,
-        },
-        end_ui_anim_player,
-        AnimationGraphHandle(anim_graphs.add(fade_graph)),
-    ))
-    .set_parent(ui_root.single())
-    .observe(|trigger: Trigger<AnimationFinished>, mut commands: Commands, 
-        mut animations: ResMut<Assets<AnimationClip>>,
-        mut anim_graphs: ResMut<Assets<AnimationGraph>>| {
-        let end_text = commands.spawn((
+    let end_ui = commands
+        .spawn((
             Node {
-                align_self: AlignSelf::Center,
-                justify_self: JustifySelf::Center,
-                align_content: AlignContent::Center,
+                position_type: PositionType::Absolute,
+                align_self: AlignSelf::Stretch,
+                justify_self: JustifySelf::Stretch,
                 justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
                 justify_items: JustifyItems::Center,
+                align_content: AlignContent::Center,
+                align_items: AlignItems::Center,
+                width: Val::Vw(100.),
+                height: Val::Vh(100.),
                 ..default()
             },
-            Text("the end\n(you can close the window now)".into()),
-            TextLayout {
-                justify: JustifyText::Center,
-                ..default()
+            BackgroundColor(Color::linear_rgba(0., 0., 0., 0.)),
+        ))
+        .id();
+    let (end_ui_target, end_ui_anim_player, fade_graph) = alpha_fade_animation(
+        0.,
+        1.,
+        4.,
+        |bg: &mut BackgroundColor| &mut bg.0,
+        "end_ui",
+        &mut animations,
+        |clip| clip.add_event(4., AnimationFinished),
+    );
+    commands
+        .entity(end_ui)
+        .insert((
+            AnimationTarget {
+                id: end_ui_target,
+                player: end_ui,
             },
-            TextFont {
-                font_size: 50.,
-                ..default()
-            },
-            TextColor(Color::linear_rgba(1., 1., 1., 0.)),
-        )).id();
-        let end_text_target = AnimationTargetId::from_name(&Name::new("end_text"));
-        let mut fade_clip = AnimationClip::default();
-        fade_clip.add_curve_to_target(
-            end_text_target, 
-            AnimatableCurve::new(
-                ColorAlpha::new(|text_color: &mut TextColor| &mut text_color.0),
-                EasingCurve::new(
+            end_ui_anim_player,
+            AnimationGraphHandle(anim_graphs.add(fade_graph)),
+        ))
+        .set_parent(ui_root.into_inner())
+        .observe(
+            |trigger: Trigger<AnimationFinished>,
+             mut commands: Commands,
+             mut animations: ResMut<Assets<AnimationClip>>,
+             mut anim_graphs: ResMut<Assets<AnimationGraph>>| {
+                let end_text = commands
+                    .spawn((
+                        Node {
+                            align_self: AlignSelf::Center,
+                            justify_self: JustifySelf::Center,
+                            align_content: AlignContent::Center,
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            justify_items: JustifyItems::Center,
+                            ..default()
+                        },
+                        Text("the end\n(you can close the window now)".into()),
+                        TextLayout {
+                            justify: JustifyText::Center,
+                            ..default()
+                        },
+                        TextFont {
+                            font_size: 50.,
+                            ..default()
+                        },
+                        TextColor(Color::linear_rgba(1., 1., 1., 0.)),
+                    ))
+                    .id();
+                let (end_text_target, end_text_anim_player, fade_graph) = alpha_fade_animation(
                     0.,
                     1.,
-                    EaseFunction::Linear
-                ).reparametrize_linear(Interval::new(0., 2.).unwrap()).unwrap()
-            )
-        );
-        let (fade_graph, fade_index) = AnimationGraph::from_clip(animations.add(fade_clip));
-        let mut end_text_anim_player = AnimationPlayer::default();
-        end_text_anim_player.play(fade_index).set_repeat(RepeatAnimation::Never);
-        commands.entity(end_text).insert((
-            AnimationTarget {
-                id: end_text_target,
-                player: end_text,
+                    2.,
+                    |text_color: &mut TextColor| &mut text_color.0,
+                    "end_text",
+                    &mut animations,
+                    |_| {},
+                );
+                commands.entity(end_text).insert((
+                    AnimationTarget {
+                        id: end_text_target,
+                        player: end_text,
+                    },
+                    end_text_anim_player,
+                    AnimationGraphHandle(anim_graphs.add(fade_graph)),
+                ));
+                commands.entity(trigger.entity()).add_child(end_text);
             },
-            end_text_anim_player,
-            AnimationGraphHandle(anim_graphs.add(fade_graph)),
-        ));
-        commands.entity(trigger.entity()).add_child(end_text);
-    });
-    commands.entity(theater_root.single()).despawn_recursive();
+        );
+    commands
+        .entity(theater_root.into_inner())
+        .despawn_recursive();
 }
 
 fn update(mut runners: Query<&mut ScriptRunner>, keyboard: Res<ButtonInput<KeyCode>>) {
@@ -1257,6 +1386,8 @@ fn main() {
         ))
         .init_state::<Progress>()
         .init_state::<Loaded>()
+        .add_computed_state::<StatePair<Progress, Loaded>>()
+        .add_computed_state::<StatePair<Loaded, Progress>>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -1271,34 +1402,35 @@ fn main() {
             ),
         )
         .add_systems(
-            OnEnter(Loaded(true)),
+            OnEnter(Loaded(true)), 
             (
                 remove_waiting_for_loads,
-                |mut start_button: Query<&mut Text, With<StartButton>>| {
-                    start_button
-                        .single_mut()
-                        .replace_range(.., "click anywhere to start\nselect options with the mouse");
-                },
-            ),
+                |mut commands: Commands, loading_text: Query<Entity, With<LoadingText>>| {
+                    for entity in loading_text.iter() {
+                        commands.entity(entity).despawn_recursive();
+                    }
+                }
+            )
         )
         .add_systems(
             OnEnter(Progress::Entering),
             (
                 switch_to_theater_ui,
-                |mut yous: Query<&mut AnimationPlayer, With<You>>| {
-                    yous.single_mut().resume_all();
+                |mut yous: Single<&mut AnimationPlayer, With<You>>| {
+                    yous.into_inner().resume_all();
                 },
             ),
         )
         .add_systems(
             OnEnter(Progress::Leaving),
-            (|mut mes: Query<&mut AnimationPlayer, With<Me>>| {
-                mes.single_mut().resume_all();
+            (|mut mes: Single<&mut AnimationPlayer, With<Me>>| {
+                mes.into_inner().resume_all();
             },),
         )
+        .add_systems(OnEnter(Progress::End), fade_to_black)
         .add_systems(
-            OnEnter(Progress::End),
-            fade_to_black,
+            OnEnter(StatePair(Progress::FadeIn, Loaded(true))),
+            fade_in_to_theater,
         )
         .add_systems(Last, (debug_events::<RunnerUpdated>(),))
         .run();
