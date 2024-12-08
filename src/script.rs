@@ -337,6 +337,7 @@ pub enum RunnerUpdated {
     ShowChoices,
     FinishedMain,
     FinishedEnd,
+    FinishedLine,
     NoScript,
     /// Triggered both on the runner and globally whenever a [`ScriptEntry::StartShow`] is reached
     StartShow,
@@ -416,6 +417,12 @@ impl ScriptRunner {
     pub fn is_line_finished(&self) -> bool {
         self.finished_line
     }
+    pub fn script(&self) -> &Handle<Script> {
+        &self.script
+    }
+    pub fn current_entry<'a>(&self, script: &'a Script) -> Option<&'a ScriptEntry> {
+        script.get_entry(self.current_entry, self.using_ended_entries)
+    }
     pub fn reset(&mut self) {
         self.finished_section = false;
         self.show_ended = false;
@@ -475,17 +482,20 @@ impl ScriptRunner {
         if *trigger.event() == UpdateRunner::ShowEnded {
             runner.show_ended = true;
         }
-        let Some(entry) = script.get_entry(runner.current_entry, runner.using_ended_entries) else {
+        let Some(entry) = runner.current_entry(script) else {
             return;
         };
         match trigger.event() {
             UpdateRunner::FinishLine => match (entry, runner.current_answer) {
                 (ScriptEntry::Line(s), None) | (ScriptEntry::Prompt { prompt: s, .. }, None) => {
                     text.0.clone_from(s);
-                    runner.finish_line(&text);
+                    if !runner.is_line_finished() {
+                        runner.finish_line(&text);
+                        commands.trigger_targets(RunnerUpdated::FinishedLine, trigger.entity());
+                    }
                     if matches!(entry, ScriptEntry::Prompt { .. }) {
                         commands
-                            .trigger_targets(RunnerUpdated::ShowChoices, runner.choices_display);
+                            .trigger_targets(RunnerUpdated::ShowChoices, [trigger.entity(), runner.choices_display]);
                     }
                 }
                 (ScriptEntry::Prompt { choices, .. }, Some(index)) => {
@@ -493,7 +503,10 @@ impl ScriptRunner {
                         return;
                     };
                     text.0.clone_from(response);
-                    runner.finish_line(&text);
+                    if !runner.is_line_finished() {
+                        runner.finish_line(&text);
+                        commands.trigger_targets(RunnerUpdated::FinishedLine, trigger.entity());
+                    }
                 }
                 (ScriptEntry::Wait(_), _)
                 | (ScriptEntry::StartShow, _)
@@ -686,9 +699,7 @@ impl ScriptChoices {
                 let Some(script) = scripts.get(runner.script.id()) else {
                     return;
                 };
-                let Some(entry) =
-                    script.get_entry(runner.current_entry, runner.using_ended_entries)
-                else {
+                let Some(entry) = runner.current_entry(script) else {
                     return;
                 };
                 match entry {
@@ -710,7 +721,7 @@ impl ScriptChoices {
                     | ScriptEntry::OnShowEnd => {}
                 }
             }
-            RunnerUpdated::StartShow => {}
+            RunnerUpdated::StartShow | RunnerUpdated::FinishedLine => {}
         }
     }
 }
@@ -782,8 +793,7 @@ fn update_script_runner_text(
         };
         // this loop is only really necessary so StartShow entries don't cost any frames to process
         loop {
-            let Some(entry) = script.get_entry(runner.current_entry, runner.using_ended_entries)
-            else {
+            let Some(entry) = runner.current_entry(script) else {
                 if !runner.finished_section {
                     if runner.using_ended_entries {
                         commands.trigger_targets(RunnerUpdated::FinishedEnd, runner_entity);
@@ -906,9 +916,12 @@ fn update_script_runner_text(
                 ) => unreachable!(),
             }
             if runner.displayed_bytes >= text_len && !runner.is_line_finished() {
-                runner.finish_line(&text.0);
+                if !runner.is_line_finished() {
+                    runner.finish_line(&text.0);
+                    commands.trigger_targets(RunnerUpdated::FinishedLine, runner_entity);
+                }
                 if currently_prompt {
-                    commands.trigger_targets(RunnerUpdated::ShowChoices, runner.choices_display);
+                    commands.trigger_targets(RunnerUpdated::ShowChoices, [runner_entity, runner.choices_display]);
                 }
             }
             break;

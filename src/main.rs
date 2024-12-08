@@ -21,7 +21,7 @@ use screen_light::{
     ScreenLight, ScreenLightExtension, ScreenLightExtensionPlugin, ScreenLightPlugin,
 };
 use script::{
-    RunnerUpdated, ScriptChoice, ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner,
+    RunnerUpdated, Script, ScriptChoice, ScriptChoices, ScriptPlugin, ScriptRunner, UpdateRunner
 };
 use video::{
     VideoFinished, VideoPlayer, VideoPlayerPlugin, VideoPlugin, VideoStream, VideoStreamSettings,
@@ -79,6 +79,9 @@ struct UiRoot;
 struct TheaterUiRoot;
 
 #[derive(Component)]
+struct Instructions;
+
+#[derive(Component)]
 #[component(storage = "SparseSet")]
 struct StartUiRoot;
 
@@ -93,6 +96,11 @@ struct You;
 #[derive(Component)]
 #[component(storage = "SparseSet")]
 struct Me;
+
+enum UpdateInstructions {
+    Show,
+    Hide,
+}
 
 const CHAIR_ROWS: i32 = 5;
 const CHAIR_COLS: i32 = 5;
@@ -737,11 +745,27 @@ fn setup(
                 align_self: AlignSelf::Stretch,
                 height: Val::Percent(20.),
                 margin: UiRect::horizontal(Val::VMin(5.)),
+                flex_direction: FlexDirection::Column,
                 ..default()
             },
             Visibility::Hidden,
         ))
         .id();
+    let instructions_text = commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            align_self: AlignSelf::Center,
+            justify_self: JustifySelf::End,
+            bottom: Val::Percent(10.),
+            ..default()
+        },
+        Text("click to continue".into()),
+        TextFont {
+            font_size: 15.,
+            ..default()
+        },
+        Instructions
+    )).id();
     let text_visible_box = commands
         .spawn((
             Node {
@@ -772,20 +796,33 @@ fn setup(
     commands.entity(theater_root).add_child(text_box_wrapper);
     commands
         .entity(text_box_wrapper)
-        .add_child(text_visible_box);
+        .add_child(text_visible_box)
+        .add_child(instructions_text);
     commands.entity(text_visible_box).add_child(script_runner);
     commands.entity(script_runner).observe(
         move |trigger: Trigger<RunnerUpdated>,
               mut commands: Commands,
+              scripts: Res<Assets<Script>>,
+              runners: Query<&ScriptRunner>,
               progress: Res<State<Progress>>,
               mut next_progress: ResMut<NextState<Progress>>| match trigger.event() {
             RunnerUpdated::HideText => {
                 commands.entity(text_box_wrapper).insert(Visibility::Hidden);
+                commands.entity(instructions_text).insert(Visibility::Hidden);
             }
             RunnerUpdated::ShowText => {
                 commands
                     .entity(text_box_wrapper)
                     .insert(Visibility::Inherited);
+            }
+            RunnerUpdated::FinishedLine => {
+                commands.entity(instructions_text).insert(Visibility::Inherited);
+            }
+            RunnerUpdated::ShowChoices => {
+                // this not conflicting with the FinishedLine thing depends on consistent
+                // ordering between those (FinishedLine is always triggered first)
+                // that's kinda kludgy and i don't like it
+                commands.entity(instructions_text).insert(Visibility::Hidden);
             }
             RunnerUpdated::FinishedMain => {
                 debug_assert_eq!(progress.get(), &Progress::Show);
@@ -856,6 +893,7 @@ fn on_text_visible_box_clicked(
     mut commands: Commands,
     with_children: Query<&Children>,
     runners: Query<(Entity, &ScriptRunner)>,
+    instructions: Query<Entity, With<Instructions>>,
 ) {
     if let Some((runner_entity, runner)) = with_children
         .get(trigger.entity())
@@ -864,6 +902,9 @@ fn on_text_visible_box_clicked(
     {
         if runner.is_line_finished() {
             commands.trigger_targets(UpdateRunner::NextLine, runner_entity);
+            for entity in instructions.iter() {
+                commands.entity(entity).insert(Visibility::Hidden);
+            }
         } else {
             commands.trigger_targets(UpdateRunner::FinishLine, runner_entity);
         }
@@ -1149,7 +1190,7 @@ fn fade_to_black(
                 justify_items: JustifyItems::Center,
                 ..default()
             },
-            Text("the end\n(you can close the window whenever you want)".into()),
+            Text("the end\n(you can close the window now)".into()),
             TextLayout {
                 justify: JustifyText::Center,
                 ..default()
