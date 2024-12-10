@@ -1,3 +1,6 @@
+//! This module is currently a little broken, it seems like video and audio desync and I'm not
+//! currently sure why. However, I consider this project "done" anyways and don't plan on fixing
+//! it unless I decide to reuse it.
 use std::{
     collections::VecDeque,
     marker::PhantomData,

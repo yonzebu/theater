@@ -4,6 +4,7 @@ use core::fmt::Debug;
 use bevy::animation::{animated_field, AnimationTarget, AnimationTargetId, RepeatAnimation};
 use bevy::asset::{RenderAssetUsages, UntypedAssetId};
 use bevy::audio::PlaybackMode;
+use bevy::color::ColorCurve;
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::world::DeferredWorld;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, NotShadowCaster};
@@ -953,9 +954,7 @@ fn on_text_visible_box_clicked(
     {
         if runner.is_line_finished() {
             commands.trigger_targets(UpdateRunner::NextLine, runner_entity);
-        } else {
-            commands.trigger_targets(UpdateRunner::FinishLine, runner_entity);
-        }
+        } 
     }
 }
 
@@ -1011,6 +1010,7 @@ fn on_start_show(
     with_materials: Query<&MeshMaterial3d<StandardMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     future_video_players: Query<(Entity, &FutureVideoPlayer)>,
+    mut audio_players: Query<&mut AudioSink, With<AudioPlayer<VideoStream>>>,
     progress: Res<State<Progress>>,
     mut next_progress: ResMut<NextState<Progress>>,
 ) {
@@ -1028,6 +1028,9 @@ fn on_start_show(
                     material.unlit = true;
                 }
             }
+        }
+        for mut sink in audio_players.iter_mut() {
+            sink.play();
         }
         debug_assert_eq!(progress.get(), &Progress::Preshow);
         next_progress.set(Progress::Show);
@@ -1066,6 +1069,7 @@ fn on_video_finished(
         AnyOf<(&MeshMaterial3d<StandardMaterial>, &mut ScreenLight)>,
         &VideoPlayer,
     )>,
+    mut audio_players: Query<(&AudioPlayer<VideoStream>, &mut AudioSink)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     script_runners: Query<Entity, With<ScriptRunner>>,
     screen_off_image: Res<ScreenOffImage>,
@@ -1093,6 +1097,11 @@ fn on_video_finished(
                 screen_light.image = screen_off_image.0.clone();
             }
             commands.entity(entity).remove::<VideoPlayer>();
+        }
+        for (AudioPlayer(stream), mut sink) in audio_players.iter_mut() {
+            if stream.id() == id {
+                sink.pause();
+            }
         }
         debug_assert!(progress.get() == &Progress::Show || progress.get() == &Progress::Postshow);
         next_progress.set(Progress::Postshow);
