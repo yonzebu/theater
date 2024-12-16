@@ -1,0 +1,321 @@
+> hey.
+- hey
+> it's been a while.
+- has it?
+...yeah. maybe too long.
+- yeah
+...
+
+...glad you could make it.
+you made it just in time, it's just about to start.
+
+[wait 5]
+[start]
+[wait 15]
+
+...i know you're not supposed to talk during movies, but... idk if we'll get another chance.
+> and... i think we really should be talking more.
+- ...yeah.
+i'm glad you agree.
+- ...
+it's ok. i can do most of the talking.
+
+[wait 3]
+
+honestly, i've been kind of worried about this whole thing.
+> it's just, we've changed so much.
+- have we?
+...i think you know the answer to that better than me.
+- i miss the old us
+...i think i do too.
+- change is scary
+that's maybe a little trite, but... yeah.
+
+> anyways, it's not just the change that's scary.
+- is it me?
+...yeah, kind of. but i think it's mostly part of the way i am, not about you specifically. if that helps.
+- is it the movie?
+nah, the movie's kinda nice, honestly.
+- everything's scary
+...yeah. i know. i feel it too.
+
+> can i... ask what you think of this whole thing? talking, i mean.
+- it's nice
+...i'm glad.
+- i don't wanna talk about it
+...yeah, that's fair.
+- i was willing to try it
+...that's really i could ask of you.
+- it sucks.
+...oh.
+
+[wait 1]
+
+> sorry, do you... want me to stop talking?
+- yes
+...y'know, i... don't actually think i can? i- i'm sorry, you know how it is.
+- nah
+...thank you.
+
+.........
+> ...y'know, i realized something while setting this up.
+- ?
+> i don't think we're going to come out of this perfect, or even in a way either of us expects.
+- that's ok
+it's gotta be, doesn't it?
+- ...or if it will even change anything?
+...that's maybe what scares me the most.
+
+i just, i worry that... this won't change anything about us. 
+the knotted web between us will continue to fester, and we'll both continue to rot.
+...and not the pleasant kind of rot, where we join the moss and leaves, but the kind that smells of dead flowers and rotting meat.
+> heh. even when i'm trying to do something, i can't help but be afraid of something.
+- i'm scared too
+...i know. maybe it never goes away.
+- this isn't scary
+...it's probably good you feel that way.
+- ...
+...it's ok. you don't have to say anything.
+
+i think... talking like this, at least, is better than nothing?
+it's... movement, at least.
+i really want to keep moving.
+> i... hope you do too.
+- moving is good
+that's a relief to hear.
+- i don't
+...i want to change that. i don't know if i can, though, or even if i should.
+
+i do kind of worry about where we might go from here, though.
+if we keep anything up, that is.
+> what if we head in the wrong direction?
+- there is no wrong way
+...you're right. the direction doesn't really matter, does it?
+- i don't want to continue anything
+...i've been afraid of that from the start.
+- i'm scared of what's next
+usually i'd try to reassure you, but... i'm worried the fear is right in this case.
+
+[wait 2]
+
+but this isn't about... what will be.
+and... i wanted to ask you something about this.
+not about that.
+> do you... remember this?
+- yes
+i don't know if that's true. i hope it is.
+- no
+...i wish i did.
+
+[wait 2]
+
+> i think, though... that i wish there was more.
+- me too
+...yeah.
+- do you?
+...maybe not? i think i do? isn't that what matters?
+
+[wait 5]
+
+> do you ever... hope for something more?
+- always
+...i think we both do. maybe that's part of why we're here.
+- sometimes
+when we hope, i think in some sense we're unsatisfied with what we have. ...maybe that's not hope, though. desperation?
+- never
+i wish i could be like that.
+
+[wait 7]
+
+...
+> does it hurt you, too?
+- what?
+...sorry, forget i asked.
+- yes.
+...i'm sorry. 
+- are you ok?
+i think you know the answer to that.
+
+[wait 10]
+
+what if... we just enjoyed the movie for a bit?
+i'm sorry, i'm just... a little tired.
+i want time to think.
+and to just... live in the moment.
+> would... that be okay?
+- yeah
+i'll be quiet now, then.
+- do i have a choice?
+...i need a break, so maybe not.
+- fine
+...thank you.
+
+[wait 60]
+
+i... have something to ask you.
+but... i really think... you won't like it.
+i don't like it.
+but i think that, maybe, i have to ask you.
+
+[wait 3]
+i... really hope it's okay.
+[wait 2]
+so, uh...
+[wait 2]
+> why didn't you do anything more?
+- i felt it was enough
+...maybe it was. it's more than i expected.
+- i ask myself that constantly
+...but not in the past tense.
+- ...
+...yeah, i... don't know what i expected you to say.
+
+[wait 5]
+
+that question was too accusatory, wasn't it? i'm sorry.
+
+[wait 10]
+
+> ...do you... miss me?
+- you never really left
+...maybe not. maybe i should have.
+- constantly
+...i doubt it.
+- i wish i did
+...that's the worst part, isn't it?
+
+> i don't blame you, you know.
+- i do
+just... don't blame yourself forever.
+- you should
+...we can be better than that.
+- ...
+...yeah. me too.
+
+> really, though, i don't think it's something we could have changed.
+- isn't it?
+...even if it is, does it matter anymore?
+- so we should just forget it?
+i... didn't say that.
+
+> i just think... we should move forward.
+- to what?
+...i think the movement is more important than where we go.
+- why?
+...what else is there to do?
+- it's scary.
+...yeah. i think... that's not always a bad thing.
+
+but... we already talked about this.
+moving, i mean.
+> are we going in circles?
+- not yet
+...i think we're close, though.
+- yeah
+thanks for telling me, at least.
+
+[wait 5]
+
+> i just... i wish i could... say the right thing, to make it turn out alright for us.
+- maybe there isn't a right thing
+...yeah. i'm beginning to wonder if there ever is one.
+- i do, too
+maybe everyone does? i don't even know if the right thing exists, though.
+
+[wait 5]
+
+> i want us to do better. but i don't know if we can.
+- me neither
+> ...but that doesn't mean we shouldn't try?
+- yeah
+> do you think... we'll be able to try in ways that matter?
+- maybe it's the trying that matters
+...you might be right.
+- no
+that... scares me. not as much as the idea that we never try, though.
+
+and... maybe i already knew that.
+
+[wait 10]
+
+you know... time is kind of a funny thing.
+this is so short, but it spans such a long time.
+and what happened with us took place over such a short time.
+but still longer than this.
+and... it feels like some things are longer than others.
+but really, they weren't that long.
+and it feels like no time has passed in some ways.
+but i know it has.
+and it scares me that it's passed.
+but it already happened.
+it scares me, but it already happened.
+i can't change it.
+i couldn't have changed time passing even if i tried.
+[wait 3]
+...i don't really know what my point is.
+maybe i don't have a point.
+> maybe i just want to talk, about something, anything i can think of.
+- it's ok
+i'm... really happy to hear that you even tolerate me.
+- i know the feeling
+...of course you do.
+- it's a lot
+...yeah. maybe too much.
+
+[wait 10]
+
+you know...
+i think that i do miss you.
+i don't know if you ever thought about me that way, though.
+and... i think it's ok if you didn't.
+> i don't know if i should think about me that way.
+- ...i did
+...i hope that wasn't too hard on you.
+- i can't think about anything right
+...me neither. and i keep thinking anyways.
+
+...i don't know how much more i have to say.
+i'm sorry.
+maybe i shouldn't apologize.
+i'm just worried i haven't said enough.
+i worry that what i said wasn't good enough.
+that us talking means nothing.
+> that it won't change anything.
+- what you said was never as important as that you said it.
+...that's... far kinder than it sounds.
+i guess i don't know what i expected you to say.
+i'm grateful for everything you've said, though.
+
+[wait 10]
+
+...i'm really sorry.
+i really have run out of things to say.
+[wait 2]
+> let's just enjoy the movie now?
+- ok
+...i'm glad you're here.
+- ...
+...
+- finally.
+...oh. i'm... i'm so sorry.
+
+[ended]
+...i guess that's it, then.
+thanks for coming.
+> did you enjoy it?
+- yes
+i'm glad.
+- no
+...that's ok.
+
+> was it worth it?
+- yes
+i thought so too.
+- no
+...i wish it had been.
+
+i... have to go now. 
+> i hope to see you again.
+- do you?
+...i really want to think i do.
+goodbye.
