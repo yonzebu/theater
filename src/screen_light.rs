@@ -4,6 +4,9 @@
 //! solved with the most convenient thing at the time and never got changed to something "better"
 //! because it was never needed. There are several rendering features that will probably break this
 //! that haven't been tested at all (e.g. deferred, lightmaps, custom materials)
+//! 
+//! Also, a lot of the code here is either directly copy-pasted from bevy's internal lighting code,
+//! or copy-pasted and then heavily modified and repurposed.
 
 use std::hash::Hash;
 use std::marker::PhantomData;

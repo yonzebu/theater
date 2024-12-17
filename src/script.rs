@@ -232,15 +232,6 @@ struct ScriptEntries {
     after_show_end: Vec<ScriptEntry>,
 }
 
-impl ScriptEntries {
-    fn from_before_end(entries: impl Into<Vec<ScriptEntry>>) -> Self {
-        ScriptEntries {
-            before_end: entries.into(),
-            after_show_end: Vec::new(),
-        }
-    }
-}
-
 #[derive(Debug, Asset, TypePath, PartialEq, Eq)]
 pub struct Script {
     raw: Cow<'static, str>,
@@ -425,9 +416,6 @@ impl ScriptRunner {
     }
     pub fn is_line_finished(&self) -> bool {
         self.finished_line
-    }
-    pub fn script(&self) -> &Handle<Script> {
-        &self.script
     }
     pub fn current_entry<'a>(&self, script: &'a Script) -> Option<&'a ScriptEntry> {
         script.get_entry(self.current_entry, self.using_ended_entries)
@@ -1015,6 +1003,13 @@ impl Plugin for ScriptPlugin {
 mod tests {
     use super::*;
 
+    fn script_entries_before_end(entries: impl Into<Vec<ScriptEntry>>) -> ScriptEntries {
+        ScriptEntries {
+            before_end: entries.into(),
+            after_show_end: Vec::new(),
+        }
+    }
+
     #[test]
     fn empty_script_parses() {
         let empties = &["", "   ", "\t "];
@@ -1037,7 +1032,7 @@ mod tests {
                 Script::from_raw(line),
                 Ok(Script {
                     raw: Cow::Borrowed(line),
-                    entries: ScriptEntries::from_before_end(vec![ScriptEntry::Line(
+                    entries: script_entries_before_end(vec![ScriptEntry::Line(
                         line.trim().into()
                     )])
                 })
@@ -1052,7 +1047,7 @@ mod tests {
             Script::from_raw(single_answer),
             Ok(Script {
                 raw: single_answer.into(),
-                entries: ScriptEntries::from_before_end(vec![
+                entries: script_entries_before_end(vec![
                     ScriptEntry::Prompt {
                         prompt: "prompt".into(),
                         choices: AnswerBlock::Single("answer".into())
@@ -1079,7 +1074,7 @@ mod tests {
             Script::from_raw(multi_answer),
             Ok(Script {
                 raw: multi_answer.into(),
-                entries: ScriptEntries::from_before_end(vec![ScriptEntry::Prompt {
+                entries: script_entries_before_end(vec![ScriptEntry::Prompt {
                     prompt: "prompt".into(),
                     choices: AnswerBlock::Many(vec![
                         Answer {
@@ -1103,7 +1098,7 @@ mod tests {
             Script::from_raw(to_parse),
             Ok(Script {
                 raw: to_parse.into(),
-                entries: ScriptEntries::from_before_end(vec![
+                entries: script_entries_before_end(vec![
                     ScriptEntry::Wait(Duration::from_secs_f64(1.)),
                     ScriptEntry::Wait(Duration::from_secs_f64(0.25)),
                     ScriptEntry::Wait(Duration::from_secs_f64(10.)),
@@ -1119,7 +1114,7 @@ mod tests {
             Script::from_raw(to_parse),
             Ok(Script {
                 raw: to_parse.into(),
-                entries: ScriptEntries::from_before_end(vec![
+                entries: script_entries_before_end(vec![
                     ScriptEntry::StartShow,
                     ScriptEntry::StartShow,
                     ScriptEntry::StartShow,
@@ -1154,7 +1149,7 @@ mod tests {
             Script::from_raw(to_parse),
             Ok(Script {
                 raw: to_parse.into(),
-                entries: ScriptEntries::from_before_end(vec![
+                entries: script_entries_before_end(vec![
                     ScriptEntry::Line("line 1".into()),
                     ScriptEntry::Wait(Duration::from_secs_f64(1.0)),
                     ScriptEntry::StartShow,

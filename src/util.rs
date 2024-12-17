@@ -5,10 +5,6 @@ use bevy::{
     prelude::*,
 };
 
-pub fn lerp(start: f32, end: f32, t: f32) -> f32 {
-    (1. - t) * start + end * t
-}
-
 #[derive(Debug)]
 pub struct ColorAlpha<Src, F> {
     f: F,

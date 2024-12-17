@@ -4,7 +4,6 @@ use core::fmt::Debug;
 use bevy::animation::{animated_field, AnimationTarget, AnimationTargetId, RepeatAnimation};
 use bevy::asset::{RenderAssetUsages, UntypedAssetId};
 use bevy::audio::PlaybackMode;
-use bevy::color::ColorCurve;
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::world::DeferredWorld;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, NotShadowCaster};
@@ -1010,7 +1009,7 @@ fn on_start_show(
     with_materials: Query<&MeshMaterial3d<StandardMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     future_video_players: Query<(Entity, &FutureVideoPlayer)>,
-    mut audio_players: Query<&mut AudioSink, With<AudioPlayer<VideoStream>>>,
+    audio_players: Query<&AudioSink, With<AudioPlayer<VideoStream>>>,
     progress: Res<State<Progress>>,
     mut next_progress: ResMut<NextState<Progress>>,
 ) {
@@ -1029,7 +1028,7 @@ fn on_start_show(
                 }
             }
         }
-        for mut sink in audio_players.iter_mut() {
+        for sink in audio_players.iter() {
             sink.play();
         }
         debug_assert_eq!(progress.get(), &Progress::Preshow);
@@ -1069,7 +1068,7 @@ fn on_video_finished(
         AnyOf<(&MeshMaterial3d<StandardMaterial>, &mut ScreenLight)>,
         &VideoPlayer,
     )>,
-    mut audio_players: Query<(&AudioPlayer<VideoStream>, &mut AudioSink)>,
+    audio_players: Query<(&AudioPlayer<VideoStream>, &AudioSink)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     script_runners: Query<Entity, With<ScriptRunner>>,
     screen_off_image: Res<ScreenOffImage>,
@@ -1098,7 +1097,7 @@ fn on_video_finished(
             }
             commands.entity(entity).remove::<VideoPlayer>();
         }
-        for (AudioPlayer(stream), mut sink) in audio_players.iter_mut() {
+        for (AudioPlayer(stream), sink) in audio_players.iter() {
             if stream.id() == id {
                 sink.pause();
             }

@@ -512,10 +512,6 @@ impl VideoStream {
             finished: false,
         })
     }
-
-    pub fn is_finished(&self) -> bool {
-        self.finished
-    }
 }
 
 pub struct VideoAudioSource {
